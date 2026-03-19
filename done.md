@@ -1,0 +1,5 @@
+- Reynolds-dependent Morison force coefficients (Cd/Cm from DNV-RP-C205, sphere + cylinder correlations)
+- Background current velocity field for SWE, maintained by sponge boundaries
+- Wave-current Doppler interaction in spectral ocean (Jonsson 1990)
+- Breaking wave detection with Froude-number limiter (McCowan 1894, Battjes-Janssen 1978)
+- Hydrostatic smoothstep submersion model with lateral Froude-Krylov force
