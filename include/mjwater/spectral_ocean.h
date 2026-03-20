@@ -1,18 +1,44 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 stanbot8
 #pragma once
-// LOD -1 (coarsest): Spectral ocean surface model.
+// LOD 0 (coarsest): Spectral ocean surface model.
 //
-// Gerstner wave superposition with Phillips spectrum sampling for
-// deep-water ocean dynamics at km scale. Provides surface height,
-// velocity, and pressure at arbitrary world positions without a grid.
+// Provides analytic wave height, velocity, and pressure at any world
+// position without a grid. Waves are a superposition of Gerstner
+// (trochoid) components sampled from a wind-driven energy spectrum.
 //
-// Physics:
-//   Deep water dispersion: omega^2 = g*k (Airy 1845)
-//   Gerstner waves: trochoid surface (peaked crests, flat troughs)
-//   Phillips spectrum: P(k) = A * exp(-1/(kL)^2) / k^4
-//     where L = V^2/g (Tessendorf 2001)
-//   Optional JONSWAP peak enhancement (Hasselmann et al. 1973)
+// How wind speed maps to wave height:
+//   Wind blowing over water transfers energy to waves. Stronger wind and
+//   longer fetch (distance) produce larger waves. The Phillips spectrum
+//   models the equilibrium energy distribution:
+//     P(k) = A * exp(-1/(kL)^2) / k^4,  L = U^2/g
+//   where U = wind speed at 10m (U_10), k = wavenumber, g = gravity.
+//   Significant wave height Hs ~ 0.21 * U^2/g for fully developed seas.
+//   At U=12 m/s, Hs ~ 3m. At U=20 m/s, Hs ~ 8.5m.
+//
+// Phillips spectrum vs JONSWAP:
+//   Phillips (1957) describes fully developed seas (infinite fetch).
+//   JONSWAP (Hasselmann 1973) adds a peak enhancement factor gamma
+//   (typically 3.3) for fetch-limited, still-growing seas. JONSWAP
+//   concentrates more energy near the peak frequency, producing more
+//   regular, less broadband waves.
+//
+// Dispersion relation:
+//   Deep water (depth >> wavelength): omega^2 = g*k        (Airy 1845)
+//   General depth d:  omega^2 = g*k*tanh(k*d)
+//   Shallow water (depth << wavelength): omega = sqrt(g*d)*k (non-dispersive)
+//   This solver uses deep-water when k*d > 10, general form otherwise.
+//
+// Directional spreading:
+//   Real ocean waves travel in a spread of directions around the wind.
+//   Cosine-squared spreading (Longuet-Higgins 1963): S(theta) ~ cos^2(theta)
+//   concentrates energy near the wind direction with smooth falloff.
+//
+// Gerstner waves vs linear theory:
+//   Linear (Airy) theory gives sinusoidal surfaces. Gerstner (1802) adds
+//   horizontal displacement, producing trochoid profiles with sharp crests
+//   and flat troughs, matching real ocean waves more closely. The steepness
+//   parameter controls how pronounced the trochoid shape is.
 //
 // References:
 //   Tessendorf, J. (2001) "Simulating Ocean Water" SIGGRAPH Course Notes
@@ -20,6 +46,8 @@
 //     J. Fluid Mech. 2(5), 417-445
 //   Hasselmann, K. et al. (1973) "Measurements of wind-wave growth and
 //     swell decay during JONSWAP" Dtsch. Hydrogr. Z. A8(12)
+//   Longuet-Higgins, M.S. et al. (1963) "Observations of the directional
+//     spectrum of sea waves" (Ocean Wave Spectra, Prentice-Hall)
 //   Kinsman, B. (1965) "Wind Waves" (Prentice-Hall). Orbital velocity.
 
 #include <algorithm>
@@ -179,9 +207,10 @@ struct SpectralOceanSolver {
       float P = PhillipsSpectrum(k, params.wind_speed, params.gravity,
                                   params.damping_scale * L);
 
-      // Directional weighting: Phillips includes cos^2(theta - wind_dir).
-      float cos_wind = std::cos(theta - wind_angle);
-      float dir_factor = cos_wind * cos_wind;
+      // NOTE: Directional spreading is already applied via cos2 above
+      // (Longuet-Higgins 1963). The Phillips spectrum P(k) is omnidirectional.
+      // A previous version also multiplied by cos^2(theta - wind_angle) here,
+      // which double-counted the directional factor.
 
       // Intrinsic frequency from dispersion relation.
       float omega_intrinsic = Dispersion(k);
@@ -213,7 +242,7 @@ struct SpectralOceanSolver {
         dk = (k_next - k_prev) * 0.5f;
       }
 
-      float amplitude = std::sqrt(2.0f * P * dir_factor * jonswap *
+      float amplitude = std::sqrt(2.0f * P * jonswap *
                                    cos2 * dk) * params.amplitude_scale;
 
       // Random phase for each wave component (deterministic from index).

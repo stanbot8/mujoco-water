@@ -1,13 +1,43 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 stanbot8
 #pragma once
-// MuJoCo body-fluid coupling.
+// MuJoCo body-fluid coupling via the Morison equation.
 //
-// Queries local flow velocity and pressure from the active LOD solver,
-// computes buoyancy, drag, and added mass forces, and writes them to
-// MuJoCo's xfrc_applied array.
+// The Morison equation decomposes hydrodynamic force on a submerged body into
+// three components:
+//
+//   F = F_drag + F_inertia + F_buoyancy
+//
+//   F_drag    = 0.5 * rho * Cd * A * |u_rel| * u_rel   (quadratic drag)
+//   F_inertia = rho * Cm * V * du/dt                    (fluid acceleration)
+//   F_buoyancy = rho * g * V_submerged                  (Archimedes)
+//
+// Where:
+//   Cd = drag coefficient (depends on Reynolds number Re = |u|*D/nu)
+//   Cm = inertia coefficient = 1 + Ca  (Ca = added mass coefficient)
+//   A  = projected frontal area
+//   V  = displaced volume
+//
+// The Keulegan-Carpenter number KC = U*T/D determines which term dominates:
+//   KC < 5:  inertia-dominated (standing waves, slow oscillation)
+//   KC > 20: drag-dominated (steady current, fast flow)
+//   Between: both terms matter (most engineering wave conditions)
+//
+// Drag coefficient regimes for a smooth sphere (Clift et al. 1978):
+//   Re < 1:      Stokes regime, Cd = 24/Re (viscous drag dominates)
+//   1 < Re < 1e3: transitional, Cd = 24/Re * (1 + 0.15*Re^0.687)
+//   1e3 < Re < 2e5: Newton regime, Cd ~ 0.44 (turbulent wake)
+//   Re > 2e5:    drag crisis, Cd drops to ~0.1 (turbulent boundary layer)
+//
+// Buoyancy uses a smoothstep submersion model: the submerged volume fraction
+// is a smooth S-curve from 0 (fully above water) to 1 (fully below), avoiding
+// discontinuous force jumps as bodies cross the free surface.
 //
 // References:
+//   Morison, J.R. et al. (1950) "The Force Exerted by Surface Waves on Piles"
+//   Clift, R., Grace, J.R., Weber, M.E. (1978) "Bubbles, Drops, and Particles"
+//   Sarpkaya, T. (2010) "Wave Forces on Offshore Structures" (Cambridge)
+//   DNV-RP-C205 (2021) "Environmental Conditions and Environmental Loads"
 //   Batchelor, G.K. (1967) "An Introduction to Fluid Dynamics" (Cambridge)
 //   Newman, J.N. (1977) "Marine Hydrodynamics" (MIT Press)
 
@@ -252,7 +282,10 @@ struct FluidCoupling {
     // 3. Inertia: Morison inertia term (Cm * rho * V * du_fluid/dt).
     if (dt > 0) {
       Vec3 fluid_acc = (fluid.velocity - body.prev_fluid_vel) / dt;
-      constexpr float kMaxFluidAcc = 2.0f * kGravity;
+      // In steep/breaking waves, fluid acceleration can reach 3-5g at the free
+      // surface.  Cap at 10g to reject numerical noise from LOD transitions
+      // while preserving extreme wave physics.
+      constexpr float kMaxFluidAcc = 10.0f * kGravity;
       float acc_mag = fluid_acc.Length();
       if (acc_mag > kMaxFluidAcc) {
         fluid_acc = fluid_acc * (kMaxFluidAcc / acc_mag);

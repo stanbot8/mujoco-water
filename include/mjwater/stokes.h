@@ -3,25 +3,57 @@
 #pragma once
 // LOD 4 (finest): Stokes creeping flow solver for cellular scales.
 //
-// At cellular scales (capillaries, cells, microorganisms), the Reynolds
-// number is << 1: viscous forces dominate inertia completely. The full
-// Navier-Stokes equations reduce to the Stokes equations:
+// When to use Stokes flow:
+//   At cellular scales (capillaries, cells, microorganisms), the Reynolds
+//   number Re = U*L/nu is << 1: viscous forces dominate inertia. A red
+//   blood cell (L~8um, U~1mm/s) has Re ~ 0.01. A swimming bacterium
+//   (L~1um, U~30um/s) has Re ~ 3e-5. At these scales, momentum diffuses
+//   instantly and flow is reversible (Purcell's "scallop theorem").
 //
-//   -grad(p) + mu * laplacian(u) + f = 0    (momentum)
+//   What breaks at higher Re: above Re ~ 1, inertia terms become important,
+//   flow separation and vortex shedding appear, and the Stokes assumption
+//   fails. The full Navier-Stokes equations are needed. This solver should
+//   not be used for Re > ~0.1.
+//
+// The Stokes equations:
+//   -grad(p) + mu * laplacian(u) + f = 0    (momentum, no inertia term)
 //   div(u) = 0                                (incompressibility)
 //
-// Solved on a regular 3D grid via pressure projection with Jacobi
-// relaxation. Each timestep:
-//   1. Compute tentative velocity from body forces + viscous diffusion
-//   2. Solve pressure Poisson equation (Jacobi iteration)
-//   3. Project velocity to divergence-free
+// Numerical method (Chorin pressure projection / fractional step):
+//   The key idea is to split incompressible flow into two steps:
 //
-// Also supports a scalar concentration field for chemotaxis/diffusion:
+//   Step 1: Tentative velocity. Advance velocity using only body forces
+//   and viscous diffusion, ignoring pressure. This gives u* which is NOT
+//   divergence-free:
+//     u* = u^n + dt * (nu * laplacian(u^n) + f/rho)
+//
+//   Step 2: Pressure projection. Solve a Poisson equation for pressure:
+//     laplacian(p) = rho/dt * div(u*)
+//   Then correct velocity to be divergence-free:
+//     u^(n+1) = u* - dt/rho * grad(p)
+//
+//   The Poisson solve uses red-black Gauss-Seidel iteration: cells are
+//   colored like a checkerboard; updating all "red" cells, then all "black"
+//   cells, allows parallelism within each color and converges faster than
+//   standard Jacobi (where all cells update simultaneously from old values).
+//
+// Grid: collocated (all variables at cell centers). This is simpler than
+//   a staggered MAC grid but can produce checkerboard pressure oscillations.
+//   At Re << 1 the pressure projection suppresses these adequately, but
+//   for higher Re flows a staggered grid would be more robust.
+//
+// Concentration advection-diffusion:
 //   dc/dt = D * laplacian(c) - u . grad(c) + S
+//   The three terms: diffusion spreads concentration (Fick's second law),
+//   advection transports it with the flow, and S is a source/sink (e.g.
+//   chemical release from a cell). Currently uses first-order upwind
+//   advection, which is diffusive but stable.
 //
 // References:
 //   Happel, J. & Brenner, H. (1983) "Low Reynolds Number Hydrodynamics"
 //     (Martinus Nijhoff). Canonical Stokes flow reference.
+//   Chorin, A.J. (1968) "Numerical solution of the Navier-Stokes equations"
+//     Math. Comp. 22(104), 745-762. Pressure projection method.
 //   Purcell, E.M. (1977) "Life at Low Reynolds Number"
 //     Am. J. Phys. 45(1), 3-11. Biology motivation.
 //   Kim, S. & Karrila, S.J. (2005) "Microhydrodynamics: Principles

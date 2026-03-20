@@ -1,17 +1,48 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 stanbot8
 #pragma once
-// LOD 0: Shallow Water Equations solver.
+// LOD 1: Shallow Water Equations (SWE) solver.
 //
-// Saint-Venant equations in conservative form with HLL approximate
-// Riemann solver, MUSCL reconstruction, Manning friction, and
-// CFL-adaptive timestep.
+// Solves the 2D Saint-Venant equations in conservative form:
+//
+//   dh/dt  + d(hu)/dx + d(hv)/dy = 0               (mass)
+//   d(hu)/dt + d(hu^2 + gh^2/2)/dx + d(huv)/dy = S (x-momentum)
+//   d(hv)/dt + d(huv)/dx + d(hv^2 + gh^2/2)/dy = S (y-momentum)
+//
+// where h = water depth, (u,v) = depth-averaged velocity, g = gravity,
+// and S includes bottom slope, friction, and external source terms.
+//
+// Numerical method:
+//   1. MUSCL reconstruction with minmod limiter achieves 2nd-order spatial
+//      accuracy while staying TVD (Total Variation Diminishing), preventing
+//      spurious oscillations near shocks and wet/dry fronts.
+//
+//   2. HLL approximate Riemann solver (Harten, Lax, van Leer 1983) computes
+//      inter-cell fluxes using two wave speed estimates (fastest left-going
+//      and right-going waves). Simpler than exact Riemann but captures
+//      shocks and rarefactions. Wave speeds from Davis (1988) estimates:
+//        S_L = min(u_L - c_L, u_R - c_R)
+//        S_R = max(u_L + c_L, u_R + c_R)
+//      where c = sqrt(g*h) is the shallow water wave speed.
+//
+//   3. Manning friction: empirical bottom drag tau_b = rho*g*n^2*|u|*u/h^(1/3)
+//      Applied semi-implicitly for stability at low depth.
+//
+//   4. Well-balanced property: hydrostatic reconstruction (Audusse et al. 2004)
+//      ensures the scheme preserves lake-at-rest equilibrium exactly, even
+//      over non-flat bathymetry.
+//
+//   5. Breaking wave dissipation: when Froude number Fr = |u|/sqrt(g*h) > 1
+//      (supercritical flow), momentum is dissipated to bring Fr back to 1.
+//      This models energy loss in breaking waves (McCowan 1894 criterion).
 //
 // References:
 //   Toro, E.F. (2001) "Shock-Capturing Methods for Free-Surface
 //     Shallow Flows" (Wiley)
 //   LeVeque, R.J. (2002) "Finite Volume Methods for Hyperbolic
 //     Problems" (Cambridge)
+//   Audusse, E. et al. (2004) "A Fast and Stable Well-Balanced Scheme"
+//     (SIAM J. Sci. Comput.)
 
 #include <algorithm>
 #include <cmath>

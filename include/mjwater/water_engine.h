@@ -3,10 +3,28 @@
 #pragma once
 // Top-level water simulation orchestrator.
 //
-// Manages the 5-level multi-resolution, multi-timestep simulation loop:
-//   Ocean (spectral) -> SWE (master dt) -> SPH (substeps) -> LBM -> Stokes
+// Manages a 5-level multi-resolution, multi-timestep simulation loop that
+// spans roughly 10 orders of magnitude in spatial scale:
 //
-// Provides a unified interface for initialization, stepping, and queries.
+//   Level 0: Ocean (spectral)     km scale,  analytic (no timestep)
+//   Level 1: SWE (shallow water)  m scale,   master_dt (~10 ms)
+//   Level 2: SPH (particles)      cm scale,  sph_dt = master_dt / n_sph
+//   Level 3: LBM (lattice)        mm scale,  lbm_dt = sph_dt / n_lbm
+//   Level 4: Stokes (creeping)    um scale,  stokes_dt = lbm_dt / n_stokes
+//
+// Each finer level substeps within its parent. The total number of fine
+// steps per master step can be large: n_sph * n_lbm * n_stokes. A runtime
+// guardrail caps total fine steps at kMaxFineSteps to prevent runaway.
+//
+// LOD activation is driven by camera distance (auto-LOD mode) or manual
+// checkboxes. When a solver activates, it is seeded from the next coarser
+// solver via LODTransition coupling functions. When it deactivates, its
+// state is merged back into the parent.
+//
+// Absorbing sponge boundaries at the SWE domain edges prevent wave
+// reflections. When ocean is active, the sponge relaxes toward the
+// analytic ocean state (radiation boundary). Without ocean, it damps
+// momentum to zero (absorbing boundary).
 
 #include <algorithm>
 #include <array>
@@ -216,7 +234,17 @@ struct WaterEngine {
     }
 
     // 4. SPH substeps.
-    // Adaptive: compute actual number of substeps from CFL-limited dt.
+    // Each finer solver substeps within its parent to satisfy its own CFL
+    // condition. SPH CFL depends on max particle velocity and smoothing
+    // length. LBM CFL is fixed by the relaxation time tau. Stokes CFL
+    // depends on kinematic viscosity and grid spacing.
+    //
+    // Total fine steps per master step = n_sph * n_lbm * n_stokes.
+    // With defaults (10 * 100 * 10) this can reach 10,000. The guardrail
+    // below caps total fine steps to prevent runaway in edge cases.
+    constexpr int kMaxFineSteps = 2000;
+    int total_fine_steps = 0;
+
     if (sph_active) {
       AABB sph_zone = lod_manager.GetZoneBounds(LODLevel::kSPH);
       float ghost_width = config.sph_smoothing * 3.0f;
@@ -224,30 +252,24 @@ struct WaterEngine {
       // Determine SPH substep count from CFL condition.
       float sph_cfl_dt = sph.Count() > 0 ? sph.ComputeMaxDt() : master_dt;
       int n_sph = std::max(1, static_cast<int>(std::ceil(master_dt / sph_cfl_dt)));
-      n_sph = std::min(n_sph, config.sph_substeps * 4);  // cap at 4x configured max
+      n_sph = std::min(n_sph, config.sph_substeps * 4);
       float sph_dt = master_dt / n_sph;
 
-      for (int s = 0; s < n_sph; ++s) {
-        // Couple SWE boundary conditions into SPH ghost zone.
+      for (int s = 0; s < n_sph && total_fine_steps < kMaxFineSteps; ++s) {
         LODTransition::CoupleSWEToSPH(swe, sph, sph_zone, ghost_width);
-
-        // SPH step.
         sph.Step(sph_dt);
+        ++total_fine_steps;
 
-        // 5. LBM sub-substeps.
+        // 5. LBM sub-substeps (fixed dt from lattice relaxation time).
         if (lbm_active) {
           int ghost_cells = 5;
 
-          // Adaptive LBM substeps: use configured count (LBM dt is fixed
-          // by the lattice, so CFL is set by tau).
-          for (int l = 0; l < config.lbm_substeps; ++l) {
-            // Couple SPH boundary conditions into LBM ghost cells.
+          for (int l = 0; l < config.lbm_substeps && total_fine_steps < kMaxFineSteps; ++l) {
             LODTransition::CoupleSPHToLBM(sph, lbm, ghost_cells);
-
-            // LBM step.
             lbm.Step();
+            ++total_fine_steps;
 
-            // 6. Stokes sub-sub-substeps.
+            // 6. Stokes sub-sub-substeps (CFL from viscous diffusion).
             if (stokes_active) {
               float stokes_cfl_dt = stokes.params.StableDt();
               float lbm_dt = lbm.PhysicalDt();
@@ -256,10 +278,11 @@ struct WaterEngine {
               n_stokes = std::min(n_stokes, config.stokes_substeps * 4);
               float stokes_dt = lbm_dt / n_stokes;
 
-              for (int st = 0; st < n_stokes; ++st) {
+              for (int st = 0; st < n_stokes && total_fine_steps < kMaxFineSteps; ++st) {
                 LODTransition::CoupleLBMToStokes(lbm, stokes,
                                                    config.stokes_ghost_cells);
                 stokes.Step(stokes_dt);
+                ++total_fine_steps;
               }
             }
           }

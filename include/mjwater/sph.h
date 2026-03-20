@@ -1,17 +1,68 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 stanbot8
 #pragma once
-// LOD 1: Weakly Compressible Smoothed Particle Hydrodynamics (WCSPH).
+// LOD 2: Weakly Compressible Smoothed Particle Hydrodynamics (WCSPH).
 //
-// Solves Navier-Stokes via Lagrangian particles with Wendland C2 kernel,
-// spatial hash neighbor search, and leapfrog integration.
+// SPH is a meshless Lagrangian method: instead of a fixed grid, the fluid
+// is represented by particles that carry mass, velocity, and other
+// properties. Particles move with the flow and interact through a smoothing
+// kernel, making SPH naturally good at free-surface flows, splashing, and
+// fragmentation where grid methods struggle.
+//
+// Key concepts:
+//
+//   Kernel (Wendland C2): a bell-shaped weighting function W(r,h) that
+//   defines how particles influence each other. The smoothing length h
+//   controls the interaction radius (compact support = 2h). Wendland C2
+//   is chosen for its C2 continuity (smooth second derivatives, needed
+//   for stable pressure computation) and positivity (no negative weights
+//   that cause tensile instability). The 3D normalization is 21/(2*pi*h^3).
+//
+//   Neighbor search: each timestep we must find all particle pairs within
+//   2h of each other. A spatial hash table bins particles into cells of
+//   size 2h, so only 27 neighboring cells need checking per particle.
+//   This gives O(N) search instead of O(N^2).
+//
+//   Density summation: each particle's density is computed from its
+//   neighbors: rho_i = sum_j(m_j * W(r_ij, h)). This avoids solving
+//   a continuity equation and ensures mass conservation exactly.
+//
+//   Equation of state (Tait): pressure from density via
+//     P = (rho_0 * c_s^2 / gamma) * ((rho/rho_0)^gamma - 1)
+//   with gamma=7. This is "weakly compressible": density variations are
+//   kept small (< 1%) by setting the speed of sound c_s much larger than
+//   the maximum flow velocity (typically c_s > 10 * u_max). The Mach
+//   number Ma = u_max/c_s should stay below ~0.1.
+//
+//   Artificial viscosity (Monaghan 1992): adds numerical dissipation to
+//   prevent particle interpenetration and suppress post-shock oscillations.
+//   NOTE: the "viscosity" parameter in SPHParams is the artificial viscosity
+//   coefficient (alpha in Monaghan's formulation), NOT the physical kinematic
+//   viscosity (m^2/s). Physical viscosity in WCSPH would require a separate
+//   Laplacian term (Morris et al. 1997).
+//
+//   XSPH velocity smoothing (Monaghan 1989): particles are advected with
+//   a weighted average of their velocity and neighbors' velocities. This
+//   reduces noise and keeps particles ordered, at the cost of slightly
+//   violating momentum conservation. The epsilon parameter (0 to 1)
+//   controls the smoothing strength.
+//
+//   Surface tension (CSF): the Continuum Surface Force model estimates
+//   surface curvature from the color field gradient and applies a normal
+//   force at the free surface. The implementation uses a heuristic
+//   Laplacian approximation (not the exact kernel Laplacian), which is
+//   adequate for visual effects but not quantitatively accurate.
 //
 // References:
+//   Monaghan, J.J. (1992) "Smoothed Particle Hydrodynamics" Ann. Rev.
+//     Astron. Astrophys. 30, 543-574. Artificial viscosity formulation.
 //   Monaghan, J.J. (2005) "Smoothing Particle Hydrodynamics"
-//     Rep. Prog. Phys. 68, 1703-1759
+//     Rep. Prog. Phys. 68, 1703-1759. Comprehensive review.
 //   Wendland, H. (1995) "Piecewise polynomial, positive definite and
 //     compactly supported radial functions of minimal degree"
 //     Adv. Comput. Math. 4, 389-396
+//   Becker, M. & Teschner, M. (2007) "Weakly compressible SPH for free
+//     surface flows" SCA. Tait EOS with gamma=7.
 
 #include <algorithm>
 #include <cmath>
@@ -403,7 +454,11 @@ struct SPHSolver {
         pa.density += particles[b].mass * kernel.W(dist);
       });
       // Clamp to avoid division by zero.
-      pa.density = std::max(pa.density, params.rest_density * 0.1f);
+      // Clamp density to 90% of rest density. Allowing lower values breaks
+      // the weakly compressible assumption and creates unphysical voids.
+      // If density drops below this, it indicates insufficient neighbors
+      // (particle deficiency near free surface or boundaries).
+      pa.density = std::max(pa.density, params.rest_density * 0.9f);
     }
   }
 

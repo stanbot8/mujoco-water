@@ -1,14 +1,66 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 stanbot8
 #pragma once
-// LOD 2: Lattice Boltzmann Method (D3Q19 BGK) solver.
+// LOD 3: Lattice Boltzmann Method (D3Q19 TRT) solver.
 //
-// Solves the incompressible Navier-Stokes equations at cellular
-// scales via the Boltzmann transport equation on a regular lattice.
+// The Lattice Boltzmann Method (LBM) solves fluid dynamics by tracking
+// particle distribution functions f_i on a regular lattice, rather than
+// solving the Navier-Stokes equations directly. It recovers the correct
+// macroscopic behavior (mass and momentum conservation) through the
+// Chapman-Enskog expansion.
+//
+// D3Q19 lattice:
+//   3D lattice with 19 velocity directions per cell: 1 rest + 6 face
+//   neighbors + 12 edge neighbors. Each direction i has:
+//     - Lattice velocity (ex, ey, ez): integer direction vector
+//     - Weight w_i: 1/3 for rest, 1/18 for faces, 1/36 for edges
+//   The lattice sound speed is c_s^2 = 1/3 (in lattice units).
+//
+// Algorithm (each timestep):
+//   1. Collision: relax distributions toward equilibrium
+//      f_eq = w_i * rho * (1 + e.u/cs^2 + (e.u)^2/(2*cs^4) - u.u/(2*cs^2))
+//   2. Forcing: add body forces via Guo scheme (accounts for discrete lattice)
+//   3. Bounce-back: solid cells reflect distributions to opposite direction
+//   4. Streaming: propagate distributions to neighbor cells (pull scheme)
+//
+// TRT (Two-Relaxation-Time) collision:
+//   Standard BGK uses a single relaxation rate omega = 1/tau. This makes
+//   the effective boundary position depend on viscosity (tau), which is
+//   unphysical. TRT decomposes distributions into symmetric and
+//   antisymmetric parts, relaxing each with its own rate:
+//     omega_plus  = 1/tau         (controls viscosity)
+//     omega_minus = 1/tau_anti    (controls wall position)
+//   The "magic parameter" Lambda = (tau - 0.5)(tau_anti - 0.5) = 1/4
+//   gives exact bounce-back wall positioning independent of viscosity.
+//
+// Guo forcing scheme (Guo et al. 2002):
+//   Body forces (gravity, external) are added as a source term in the
+//   collision operator. The velocity used for equilibrium is corrected
+//   by half the force: u_eq = u + F/(2*rho). The source term Si includes
+//   both first-order (e_i - u) and second-order (e_i*e_i*u) contributions
+//   to correctly recover the forced Navier-Stokes equations.
+//
+// Pull streaming:
+//   Each cell pulls distributions FROM its neighbors (as opposed to push
+//   streaming where each cell pushes TO neighbors). Pull is cache-friendly
+//   for reading. Bounce-back on solid cells is handled during collision:
+//   solid cells write f[opp_i] = f[i], then streaming naturally picks up
+//   the reflected values when pulling from solid neighbors.
+//
+// Unit conversion:
+//   LBM operates in lattice units (dx=1, dt=1). Physical quantities are
+//   recovered via scaling:
+//     nu_phys = (dx_phys^2 / dt_phys) * (tau - 0.5) / 3
+//     u_phys  = u_lattice * dx_phys / dt_phys
+//     F_phys  = F_lattice * dx_phys / dt_phys^2
 //
 // References:
 //   Kruger et al. (2017) "The Lattice Boltzmann Method: Principles
-//     and Practice" (Springer)
+//     and Practice" (Springer). Comprehensive modern reference.
+//   Guo, Z. et al. (2002) "Discrete lattice effects on the forcing
+//     term in the LBM" Phys. Rev. E 65(4). Guo forcing scheme.
+//   Ginzburg, I. (2005) "Equilibrium-type and link-type lattice
+//     Boltzmann models" Adv. Water Resources. TRT magic parameter.
 //   Succi, S. (2001) "The Lattice Boltzmann Equation for Fluid
 //     Dynamics and Beyond" (Oxford)
 
@@ -61,8 +113,11 @@ struct LBMSolver {
     grid.Init(nx, ny, nz, p.dx_phys, ox, oy, oz);
     body_force.assign(grid.CellCount(), Vec3{});
 
-    // Set default gravity force (convert physical to lattice units).
-    // f_lattice = f_physical * dt^2 / dx (in lattice Boltzmann units)
+    // Convert gravitational acceleration to lattice force units.
+    // In Guo forcing, F is acceleration in lattice units:
+    //   F_lattice = a_physical * dt_phys^2 / dx_phys
+    // This comes from: a_phys [m/s^2] * (dt_phys/dx_phys) * dt_phys
+    //                 = a_phys * dt^2/dx [lattice acceleration]
     float gz_lattice = -kGravity * params.dt_phys * params.dt_phys /
                        params.dx_phys;
     for (auto& f : body_force) f.z = gz_lattice;
