@@ -128,7 +128,9 @@ struct SPHParams {
   float smoothing_length = 0.02f;    // h (m)
   float rest_density = kWaterDensity;
   float speed_of_sound = 20.0f;      // artificial c_s for WCSPH
-  float viscosity = kWaterViscosity;
+  // Monaghan artificial viscosity coefficient (alpha). NOT physical kinematic
+  // viscosity. Typical values: 0.01 (low dissipation) to 0.1 (high dissipation).
+  float alpha_viscosity = 0.08f;
   float gravity = kGravity;
   float cfl = 0.25f;
   float xsph_epsilon = 0.5f;         // XSPH velocity smoothing (Monaghan 1989)
@@ -485,7 +487,7 @@ struct SPHSolver {
   }
 
   void ComputeForces() {
-    float nu = params.viscosity;
+    float alpha = params.alpha_viscosity;
     uint32_t n = Count();
 
     for (uint32_t a = 0; a < n; ++a) {
@@ -508,13 +510,17 @@ struct SPHSolver {
                        pb.pressure / (pb.density * pb.density);
         acc_pressure += r_hat * (pb.mass * p_term * dw);
 
-        // Viscosity (artificial, Monaghan 1992).
+        // Artificial viscosity (Monaghan 1992): dissipates energy when
+        // particles approach each other (vr < 0), preventing interpenetration.
+        // mu = h * (dv.dr) / (|r|^2 + epsilon*h^2) is a smoothed velocity
+        // gradient. pi_ab scales with alpha * c_s * mu / avg_density.
         Vec3 dv = pa.vel - pb.vel;
         float vr = dv.Dot(r);
         if (vr < 0) {
           float mu = params.smoothing_length * vr /
                      (dist * dist + 0.01f * params.smoothing_length * params.smoothing_length);
-          float pi_ab = -nu * mu / (0.5f * (pa.density + pb.density));
+          float pi_ab = -alpha * params.speed_of_sound * mu /
+                        (0.5f * (pa.density + pb.density));
           acc_viscosity += r_hat * (pb.mass * pi_ab * dw);
         }
       });
