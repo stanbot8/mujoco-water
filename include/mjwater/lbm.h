@@ -171,9 +171,12 @@ struct LBMSolver {
           }
           if (rho > 1e-10f) { u.x /= rho; u.y /= rho; u.z /= rho; }
 
-          // Add half-force correction to velocity (Guo scheme).
+          // Guo half-force velocity correction: the physical velocity is
+          // u_phys = (sum f_i * e_i)/rho + F*dt/2. Since body_force stores
+          // acceleration (force per unit mass, not per unit volume), the
+          // correction is simply F * 0.5 (half timestep in lattice units).
           Vec3 F = body_force[c];
-          Vec3 u_eq = u + F * (0.5f / rho);
+          Vec3 u_eq = u + F * 0.5f;
 
           // Compute equilibrium.
           float feq[kQ];
