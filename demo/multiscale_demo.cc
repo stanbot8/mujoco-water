@@ -161,12 +161,14 @@ struct Viewer {
           // Shift+right drag: boom arm height.
           v->cam.lookat[2] += dy / wh * v->cam.distance * 0.5;
         } else {
-          // Right drag: move pawn on XY plane.
-          // Use MuJoCo's own pan math (knows its own azimuth convention),
-          // then restore Z to lock movement to the XY plane.
+          // Right drag: pan lookat on XY plane.
+          // Save distance before mjv_moveCamera (which can modify it),
+          // then restore both distance and Z.
+          double dist = v->cam.distance;
           double z = v->cam.lookat[2];
           mjv_moveCamera(v->model, mjMOUSE_MOVE_H, -dx/ww, -dy/wh, &v->scn, &v->cam);
           v->cam.lookat[2] = z;
+          v->cam.distance = dist;
         }
       }
     });
