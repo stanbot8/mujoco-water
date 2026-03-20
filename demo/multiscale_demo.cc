@@ -287,11 +287,31 @@ struct CoupledBody {
   BodyCoupling coupling;
 };
 
-static void RenderWireframe(mjvScene* scn, const WaterEngine& engine,
+static void RenderWireframe(const WaterEngine& engine,
                              const mjvCamera& cam) {
   if (!g_show_grid) return;
 
-  mjv_resetLines(scn);
+  // Screen-space projection: read GL matrices left by mjr_render.
+  float proj[16], modelview[16];
+  glGetFloatv(GL_PROJECTION_MATRIX, proj);
+  glGetFloatv(GL_MODELVIEW_MATRIX, modelview);
+  int vp[4]; glGetIntegerv(GL_VIEWPORT, vp);
+  float vpw = static_cast<float>(vp[2]), vph = static_cast<float>(vp[3]);
+
+  auto project = [&](float x, float y, float z, float& sx, float& sy) -> bool {
+    float ex = modelview[0]*x + modelview[4]*y + modelview[8]*z + modelview[12];
+    float ey = modelview[1]*x + modelview[5]*y + modelview[9]*z + modelview[13];
+    float ez = modelview[2]*x + modelview[6]*y + modelview[10]*z + modelview[14];
+    float cx = proj[0]*ex + proj[4]*ey + proj[8]*ez + proj[12];
+    float cy = proj[1]*ex + proj[5]*ey + proj[9]*ez + proj[13];
+    float cw = proj[3]*ex + proj[7]*ey + proj[11]*ez + proj[15];
+    if (cw <= 0.001f) return false;
+    sx = (cx/cw * 0.5f + 0.5f) * vpw;
+    sy = (1.0f - (cy/cw * 0.5f + 0.5f)) * vph;
+    return true;
+  };
+
+  auto* dl = ImGui::GetForegroundDrawList();
 
   uint32_t nx = engine.swe.grid.nx, ny = engine.swe.grid.ny;
   float half_x = kSweDx * kSweN * 0.5f;
@@ -316,8 +336,11 @@ static void RenderWireframe(mjvScene* scn, const WaterEngine& engine,
 
   auto add_line = [&](float x0, float y0, float z0,
                       float x1, float y1, float z1, const float* rgba) {
-    float from[3] = {x0, y0, z0}, to[3] = {x1, y1, z1};
-    mjv_addLine(scn, from, to, rgba);
+    float sx0, sy0, sx1, sy1;
+    if (!project(x0, y0, z0, sx0, sy0) || !project(x1, y1, z1, sx1, sy1)) return;
+    ImU32 col = IM_COL32(static_cast<int>(rgba[0]*255), static_cast<int>(rgba[1]*255),
+                          static_cast<int>(rgba[2]*255), static_cast<int>(rgba[3]*255));
+    dl->AddLine({sx0, sy0}, {sx1, sy1}, col, 1.0f);
   };
 
   constexpr uint32_t kCoarse = 5;
@@ -1193,13 +1216,15 @@ int main() {
                     mjCAT_ALL, &viewer.scn);
 
     RenderDynamicGeoms(&viewer.scn, engine);
-    RenderWireframe(&viewer.scn, engine, viewer.cam);
 
     mjr_render(viewport, &viewer.scn, &viewer.con);
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+
+    // Wireframe after mjr_render (needs GL matrices) and after NewFrame (needs ImGui draw list).
+    RenderWireframe(engine, viewer.cam);
 
     DrawPanel(engine, cfg, static_cast<float>(viewer.cam.distance), viewer.cam,
               m, d, &coupled_bodies);
