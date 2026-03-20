@@ -165,12 +165,20 @@ struct FluidCoupling {
   //   Re > 2e5:    post-critical (drag crisis), Cd ~ 0.1
   //
   // Reference: DNV-RP-C205 (2021) Table 6-4, Clift et al. (1978).
+  // Regime boundaries (Clift et al. 1978, Table 5.2).
+  static constexpr float kReStokes = 0.1f;       // below: creeping flow
+  static constexpr float kReTransition = 1.0f;    // above: Schiller-Naumann
+  static constexpr float kReNewton = 1000.0f;     // above: constant Cd plateau
+  static constexpr float kReCritical = 2e5f;      // above: drag crisis
+  static constexpr float kCdNewtonSphere = 0.44f; // Cd in Newton regime
+  static constexpr float kCdPostCritical = 0.1f;  // Cd after drag crisis
+
   static float SphereDragCoeff(float Re) {
-    if (Re < 0.1f) return 240.0f;  // cap at very low Re
-    if (Re < 1.0f) return 24.0f / Re;
-    if (Re < 1000.0f) return 24.0f / Re * (1.0f + 0.15f * std::pow(Re, 0.687f));
-    if (Re < 2e5f) return 0.44f;
-    return 0.1f;  // post drag-crisis
+    if (Re < kReStokes) return 24.0f / kReStokes;
+    if (Re < kReTransition) return 24.0f / Re;
+    if (Re < kReNewton) return 24.0f / Re * (1.0f + 0.15f * std::pow(Re, 0.687f));
+    if (Re < kReCritical) return kCdNewtonSphere;
+    return kCdPostCritical;
   }
 
   // Reynolds-dependent drag coefficient for a smooth cylinder (2D cross-flow).

@@ -28,6 +28,13 @@
 
 namespace mjwater {
 
+// Ghost zone blend factor: linearly ramps from 1.0 at the boundary of the
+// fine solver to 0.0 at ghost_cells depth into the coarse solver. Used by
+// all coupling functions to smoothly blend coarse data into fine boundaries.
+inline float GhostBlend(int dist_from_boundary, int ghost_cells) {
+  return 1.0f - static_cast<float>(dist_from_boundary) / ghost_cells;
+}
+
 struct LODTransition {
 
   // --- SWE -> SPH: Spawn particles from height field columns ---
@@ -262,7 +269,7 @@ struct LODTransition {
           Vec3 u_lattice = vel_phys * vel_scale;
 
           // Blend: stronger at boundary, weaker deeper inside.
-          float blend = 1.0f - static_cast<float>(dist) / ghost_cells;
+          float blend = GhostBlend(dist, ghost_cells);
 
           float feq[kQ];
           LBMSolver::Equilibrium(rho_lattice, u_lattice, feq);
@@ -309,7 +316,7 @@ struct LODTransition {
         float target_hv = target_h * vel.y;
 
         // Blend: strongest at edge, weakest at ghost_cells inside.
-        float blend = 1.0f - static_cast<float>(dist) / ghost_cells;
+        float blend = GhostBlend(dist, ghost_cells);
         blend *= blend;  // quadratic falloff for smoother transition
 
         size_t idx = swe.grid.Idx(i, j);
@@ -447,7 +454,7 @@ struct LODTransition {
           Vec3 vel = lbm.grid.Velocity(lc);
           float vel_scale = lbm.params.VelocityScale();
 
-          float blend = 1.0f - static_cast<float>(dist) / ghost_cells;
+          float blend = GhostBlend(dist, ghost_cells);
 
           stokes.grid.u[sc] += blend * (vel.x * vel_scale - stokes.grid.u[sc]);
           stokes.grid.v[sc] += blend * (vel.y * vel_scale - stokes.grid.v[sc]);

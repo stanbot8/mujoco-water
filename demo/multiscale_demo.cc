@@ -43,7 +43,7 @@ static constexpr float kSweDx = 20.0f;            // 20m cells -> 1km x 1km doma
 static float g_z_top = 20.0f;                      // hfield max z above origin
 static float g_z_bottom = 30.0f;                   // hfield depth below origin
 static constexpr float kOceanFloorZ = -100.0f;     // visual ocean floor
-static constexpr float kPanelWidth = 300.0f;      // side panel width (fwmc convention)
+static constexpr float kPanelWidth = 300.0f;      // side panel width (mujoco-water convention)
 
 // ---- Global state ----
 
@@ -518,7 +518,7 @@ static void RenderWireframe(mjvScene* scn, const WaterEngine& engine,
   }
 }
 
-// ---- ImGui side panel (fwmc convention: 300px, top-left, collapsing headers) ----
+// ---- ImGui side panel (mujoco-water convention: 300px, top-left, collapsing headers) ----
 
 static void DrawPanel(WaterEngine& engine, const WaterEngineConfig& cfg,
                        float cam_distance, mjvCamera& cam,

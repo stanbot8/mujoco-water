@@ -283,169 +283,96 @@ struct ShallowWaterSolver {
     }
   }
 
-  // X-direction sweep with MUSCL reconstruction.
-  void SweepX(float dt) {
-    auto& h  = grid.channels[ch_h].data;
-    auto& hu = grid.channels[ch_hu].data;
-    auto& hv = grid.channels[ch_hv].data;
+  // Generic directional sweep with MUSCL reconstruction.
+  // The sweep is axis-agnostic: callers provide lambdas to map (i, j) to
+  // grid indices and to read/write the primary vs transverse momentum.
+  // For x-sweep: primary = hu, transverse = hv, step along i with j fixed.
+  // For y-sweep: primary = hv, transverse = hu, step along j with i fixed.
+  template <typename IdxFn>
+  void Sweep(float dt, uint32_t n_sweep, uint32_t n_perp,
+             IdxFn idx_fn, int ch_prim, int ch_trans) {
+    auto& h_data  = grid.channels[ch_h].data;
+    auto& prim_data  = grid.channels[ch_prim].data;
+    auto& trans_data = grid.channels[ch_trans].data;
     const auto& bathy = grid.channels[ch_bathy].data;
-    auto& h_t  = grid.channels[ch_h].temp;
-    auto& hu_t = grid.channels[ch_hu].temp;
-    auto& hv_t = grid.channels[ch_hv].temp;
+    auto& h_t     = grid.channels[ch_h].temp;
+    auto& prim_t  = grid.channels[ch_prim].temp;
+    auto& trans_t = grid.channels[ch_trans].temp;
 
     float ratio = dt / grid.dx;
     float g = params.gravity;
-    uint32_t nx = grid.nx, ny = grid.ny;
 
-    // Copy current state to temp as base.
-    h_t = h; hu_t = hu; hv_t = hv;
+    h_t = h_data; prim_t = prim_data; trans_t = trans_data;
 
-    for (uint32_t j = 0; j < ny; ++j) {
-      for (uint32_t i = 0; i < nx - 1; ++i) {
-        size_t iL = grid.Idx(i, j);
-        size_t iR = grid.Idx(i + 1, j);
+    for (uint32_t j = 0; j < n_perp; ++j) {
+      for (uint32_t i = 0; i < n_sweep - 1; ++i) {
+        size_t iL = idx_fn(i, j);
+        size_t iR = idx_fn(i + 1, j);
 
         // MUSCL reconstruction with minmod slope limiter (2nd-order TVD).
-        // Extrapolate cell-centered values to the interface i+1/2:
-        //   qL = q[i]   + 0.5 * minmod(dq_i, dq_{i+1})
-        //   qR = q[i+1] - 0.5 * minmod(dq_{i+1}, dq_{i+2})
         State qL, qR;
 
-        if (i > 0 && i + 2 < nx) {
-          size_t iLL = grid.Idx(i - 1, j);
-          size_t iRR = grid.Idx(i + 2, j);
-          // Slopes for left cell (i).
-          float dh_L  = Minmod(h[iR]  - h[iL],  h[iL]  - h[iLL]);
-          float dhu_L = Minmod(hu[iR] - hu[iL], hu[iL] - hu[iLL]);
-          float dhv_L = Minmod(hv[iR] - hv[iL], hv[iL] - hv[iLL]);
-          // Slopes for right cell (i+1).
-          float dh_R  = Minmod(h[iRR]  - h[iR],  h[iR]  - h[iL]);
-          float dhu_R = Minmod(hu[iRR] - hu[iR], hu[iR] - hu[iL]);
-          float dhv_R = Minmod(hv[iRR] - hv[iR], hv[iR] - hv[iL]);
+        if (i > 0 && i + 2 < n_sweep) {
+          size_t iLL = idx_fn(i - 1, j);
+          size_t iRR = idx_fn(i + 2, j);
 
-          qL = {h[iL]  + 0.5f * dh_L,
-                hu[iL] + 0.5f * dhu_L,
-                hv[iL] + 0.5f * dhv_L};
-          qR = {h[iR]  - 0.5f * dh_R,
-                hu[iR] - 0.5f * dhu_R,
-                hv[iR] - 0.5f * dhv_R};
-          // Ensure non-negative depth in reconstructed states.
-          if (qL.h < 0) qL = {h[iL], hu[iL], hv[iL]};
-          if (qR.h < 0) qR = {h[iR], hu[iR], hv[iR]};
+          float dh_L = Minmod(h_data[iR]    - h_data[iL],    h_data[iL]    - h_data[iLL]);
+          float dp_L = Minmod(prim_data[iR]  - prim_data[iL],  prim_data[iL]  - prim_data[iLL]);
+          float dt_L = Minmod(trans_data[iR] - trans_data[iL], trans_data[iL] - trans_data[iLL]);
+
+          float dh_R = Minmod(h_data[iRR]    - h_data[iR],    h_data[iR]    - h_data[iL]);
+          float dp_R = Minmod(prim_data[iRR]  - prim_data[iR],  prim_data[iR]  - prim_data[iL]);
+          float dt_R = Minmod(trans_data[iRR] - trans_data[iR], trans_data[iR] - trans_data[iL]);
+
+          qL = {h_data[iL]    + 0.5f * dh_L,
+                prim_data[iL]  + 0.5f * dp_L,
+                trans_data[iL] + 0.5f * dt_L};
+          qR = {h_data[iR]    - 0.5f * dh_R,
+                prim_data[iR]  - 0.5f * dp_R,
+                trans_data[iR] - 0.5f * dt_R};
+
+          if (qL.h < 0) qL = {h_data[iL], prim_data[iL], trans_data[iL]};
+          if (qR.h < 0) qR = {h_data[iR], prim_data[iR], trans_data[iR]};
         } else {
-          // Fall back to first-order at domain boundaries.
-          qL = {h[iL], hu[iL], hv[iL]};
-          qR = {h[iR], hu[iR], hv[iR]};
+          qL = {h_data[iL], prim_data[iL], trans_data[iL]};
+          qR = {h_data[iR], prim_data[iR], trans_data[iR]};
         }
 
-        // HLL flux at interface i+1/2.
-        float fh, fhu, fhv;
-        HLLFlux(qL, qR, g, params.min_depth, fh, fhu, fhv);
+        float fh, f_prim, f_trans;
+        HLLFlux(qL, qR, g, params.min_depth, fh, f_prim, f_trans);
 
-        // Bathymetry source term (hydrostatic reconstruction).
         float db = bathy[iR] - bathy[iL];
-        float h_avg = 0.5f * (h[iL] + h[iR]);
+        float h_avg = 0.5f * (h_data[iL] + h_data[iR]);
         float src = -g * h_avg * db / grid.dx;
 
-        // Update: subtract flux from left, add to right.
-        h_t[iL]  -= ratio * fh;
-        hu_t[iL] -= ratio * (fhu + src * 0.5f * grid.dx);
-        hv_t[iL] -= ratio * fhv;
-
-        h_t[iR]  += ratio * fh;
-        hu_t[iR] += ratio * (fhu - src * 0.5f * grid.dx);
-        hv_t[iR] += ratio * fhv;
+        h_t[iL]      -= ratio * fh;
+        h_t[iR]      += ratio * fh;
+        prim_t[iL]   -= ratio * (f_prim + src * 0.5f * grid.dx);
+        prim_t[iR]   += ratio * (f_prim - src * 0.5f * grid.dx);
+        trans_t[iL]  -= ratio * f_trans;
+        trans_t[iR]  += ratio * f_trans;
       }
     }
 
-    // Swap: temp becomes current.
-    std::swap(h, h_t);
-    std::swap(hu, hu_t);
-    std::swap(hv, hv_t);
+    std::swap(h_data, h_t);
+    std::swap(prim_data, prim_t);
+    std::swap(trans_data, trans_t);
 
-    // Enforce non-negative depth.
-    for (size_t i = 0; i < h.size(); ++i) {
-      if (h[i] < 0) { h[i] = 0; hu[i] = 0; hv[i] = 0; }
+    for (size_t i = 0; i < h_data.size(); ++i) {
+      if (h_data[i] < 0) { h_data[i] = 0; prim_data[i] = 0; trans_data[i] = 0; }
     }
   }
 
-  // Y-direction sweep (same structure, transposed).
+  void SweepX(float dt) {
+    Sweep(dt, grid.nx, grid.ny,
+          [&](uint32_t i, uint32_t j) { return grid.Idx(i, j); },
+          ch_hu, ch_hv);
+  }
+
   void SweepY(float dt) {
-    auto& h  = grid.channels[ch_h].data;
-    auto& hu = grid.channels[ch_hu].data;
-    auto& hv = grid.channels[ch_hv].data;
-    const auto& bathy = grid.channels[ch_bathy].data;
-    auto& h_t  = grid.channels[ch_h].temp;
-    auto& hu_t = grid.channels[ch_hu].temp;
-    auto& hv_t = grid.channels[ch_hv].temp;
-
-    float ratio = dt / grid.dx;
-    float g = params.gravity;
-    uint32_t nx = grid.nx, ny = grid.ny;
-
-    h_t = h; hu_t = hu; hv_t = hv;
-
-    for (uint32_t j = 0; j < ny - 1; ++j) {
-      for (uint32_t i = 0; i < nx; ++i) {
-        size_t iB = grid.Idx(i, j);
-        size_t iT = grid.Idx(i, j + 1);
-
-        // MUSCL reconstruction for y-sweep (hv is primary momentum).
-        State qB, qT;
-
-        if (j > 0 && j + 2 < ny) {
-          size_t iBB = grid.Idx(i, j - 1);
-          size_t iTT = grid.Idx(i, j + 2);
-          // Slopes for bottom cell (j).
-          float dh_B  = Minmod(h[iT]  - h[iB],  h[iB]  - h[iBB]);
-          float dhv_B = Minmod(hv[iT] - hv[iB], hv[iB] - hv[iBB]);
-          float dhu_B = Minmod(hu[iT] - hu[iB], hu[iB] - hu[iBB]);
-          // Slopes for top cell (j+1).
-          float dh_T  = Minmod(h[iTT]  - h[iT],  h[iT]  - h[iB]);
-          float dhv_T = Minmod(hv[iTT] - hv[iT], hv[iT] - hv[iB]);
-          float dhu_T = Minmod(hu[iTT] - hu[iT], hu[iT] - hu[iB]);
-
-          float hB  = h[iB]  + 0.5f * dh_B;
-          float hvB = hv[iB] + 0.5f * dhv_B;
-          float huB = hu[iB] + 0.5f * dhu_B;
-          float hT  = h[iT]  - 0.5f * dh_T;
-          float hvT = hv[iT] - 0.5f * dhv_T;
-          float huT = hu[iT] - 0.5f * dhu_T;
-
-          if (hB < 0) { hB = h[iB]; hvB = hv[iB]; huB = hu[iB]; }
-          if (hT < 0) { hT = h[iT]; hvT = hv[iT]; huT = hu[iT]; }
-
-          qB = {hB, hvB, huB};  // swap hu/hv for y-direction
-          qT = {hT, hvT, huT};
-        } else {
-          qB = {h[iB], hv[iB], hu[iB]};
-          qT = {h[iT], hv[iT], hu[iT]};
-        }
-
-        float fh, fhv_flux, fhu_flux;
-        HLLFlux(qB, qT, g, params.min_depth, fh, fhv_flux, fhu_flux);
-
-        float db = bathy[iT] - bathy[iB];
-        float h_avg = 0.5f * (h[iB] + h[iT]);
-        float src = -g * h_avg * db / grid.dx;
-
-        h_t[iB]  -= ratio * fh;
-        hv_t[iB] -= ratio * (fhv_flux + src * 0.5f * grid.dx);
-        hu_t[iB] -= ratio * fhu_flux;
-
-        h_t[iT]  += ratio * fh;
-        hv_t[iT] += ratio * (fhv_flux - src * 0.5f * grid.dx);
-        hu_t[iT] += ratio * fhu_flux;
-      }
-    }
-
-    std::swap(h, h_t);
-    std::swap(hu, hu_t);
-    std::swap(hv, hv_t);
-
-    for (size_t i = 0; i < h.size(); ++i) {
-      if (h[i] < 0) { h[i] = 0; hu[i] = 0; hv[i] = 0; }
-    }
+    Sweep(dt, grid.ny, grid.nx,
+          [&](uint32_t j, uint32_t i) { return grid.Idx(i, j); },
+          ch_hv, ch_hu);
   }
 
   // Reflective wall boundary conditions: zero normal momentum at edges.

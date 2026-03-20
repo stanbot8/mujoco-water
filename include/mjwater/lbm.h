@@ -182,47 +182,37 @@ struct LBMSolver {
           float feq[kQ];
           Equilibrium(rho, u_eq, feq);
 
+          // Compute Guo source terms for all directions.
+          float Si[kQ];
+          for (int i = 0; i < kQ; ++i) {
+            float e_dot_u = kEx[i] * u.x + kEy[i] * u.y + kEz[i] * u.z;
+            float si_x = (kEx[i] - u.x) / kCsSq +
+                         e_dot_u * kEx[i] / (kCsSq * kCsSq);
+            float si_y = (kEy[i] - u.y) / kCsSq +
+                         e_dot_u * kEy[i] / (kCsSq * kCsSq);
+            float si_z = (kEz[i] - u.z) / kCsSq +
+                         e_dot_u * kEz[i] / (kCsSq * kCsSq);
+            Si[i] = (1.0f - 0.5f * omega_plus) * kW[i] *
+                    (si_x * F.x + si_y * F.y + si_z * F.z);
+          }
+
           if (use_trt) {
             // TRT collision: separate symmetric and antisymmetric parts.
-            // f_i^+ = (f_i + f_opp_i) / 2, f_i^- = (f_i - f_opp_i) / 2
-            // Same for feq. Relax each with its own rate.
             for (int i = 0; i < kQ; ++i) {
               int opp = kOpp[i];
-              float fi_plus  = 0.5f * (fi[i] + fi[opp]);
-              float fi_minus = 0.5f * (fi[i] - fi[opp]);
+              float fi_plus   = 0.5f * (fi[i] + fi[opp]);
+              float fi_minus  = 0.5f * (fi[i] - fi[opp]);
               float feq_plus  = 0.5f * (feq[i] + feq[opp]);
               float feq_minus = 0.5f * (feq[i] - feq[opp]);
-
-              // Guo source term.
-              float e_dot_u = kEx[i] * u.x + kEy[i] * u.y + kEz[i] * u.z;
-              float si_x = (kEx[i] - u.x) / kCsSq +
-                           e_dot_u * kEx[i] / (kCsSq * kCsSq);
-              float si_y = (kEy[i] - u.y) / kCsSq +
-                           e_dot_u * kEy[i] / (kCsSq * kCsSq);
-              float si_z = (kEz[i] - u.z) / kCsSq +
-                           e_dot_u * kEz[i] / (kCsSq * kCsSq);
-              float Si = (1.0f - 0.5f * omega_plus) * kW[i] *
-                         (si_x * F.x + si_y * F.y + si_z * F.z);
-
               fo[i] = fi[i]
                       - omega_plus  * (fi_plus  - feq_plus)
                       - omega_minus * (fi_minus - feq_minus)
-                      + Si;
+                      + Si[i];
             }
           } else {
-            // BGK collision with Guo forcing.
+            // BGK collision.
             for (int i = 0; i < kQ; ++i) {
-              float e_dot_u = kEx[i] * u.x + kEy[i] * u.y + kEz[i] * u.z;
-              float si_x = (kEx[i] - u.x) / kCsSq +
-                           e_dot_u * kEx[i] / (kCsSq * kCsSq);
-              float si_y = (kEy[i] - u.y) / kCsSq +
-                           e_dot_u * kEy[i] / (kCsSq * kCsSq);
-              float si_z = (kEz[i] - u.z) / kCsSq +
-                           e_dot_u * kEz[i] / (kCsSq * kCsSq);
-              float Si = (1.0f - 0.5f * omega_plus) * kW[i] *
-                         (si_x * F.x + si_y * F.y + si_z * F.z);
-
-              fo[i] = fi[i] - omega_plus * (fi[i] - feq[i]) + Si;
+              fo[i] = fi[i] - omega_plus * (fi[i] - feq[i]) + Si[i];
             }
           }
         }
