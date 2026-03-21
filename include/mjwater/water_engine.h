@@ -125,6 +125,9 @@ struct WaterEngine {
   std::vector<float> sponge_target_hu;
   std::vector<float> sponge_target_hv;
 
+  // Flux tracking for conservative SWE-SPH coupling.
+  SPHFluxTracker sph_flux_tracker;
+
   void Init(const WaterEngineConfig& cfg) {
     config = cfg;
 
@@ -249,6 +252,13 @@ struct WaterEngine {
       AABB sph_zone = lod_manager.GetZoneBounds(LODLevel::kSPH);
       float ghost_width = config.sph_smoothing * 3.0f;
 
+      // Compute SWE interface fluxes at SPH boundary for flux correction.
+      auto swe_flux = ComputeSWEInterfaceFluxes(swe, sph_zone);
+
+      // Initialize flux tracker for this master step.
+      sph_flux_tracker.Reset();
+      sph_flux_tracker.SetDeadZone(config.sph_smoothing);
+
       // Determine SPH substep count from CFL condition.
       float sph_cfl_dt = sph.Count() > 0 ? sph.ComputeMaxDt() : master_dt;
       int n_sph = std::max(1, static_cast<int>(std::ceil(master_dt / sph_cfl_dt)));
@@ -257,7 +267,12 @@ struct WaterEngine {
 
       for (int s = 0; s < n_sph && total_fine_steps < kMaxFineSteps; ++s) {
         LODTransition::CoupleSWEToSPH(swe, sph, sph_zone, ghost_width);
+
+        // Track particles near boundary before step.
+        sph_flux_tracker.BeforeStep(sph.particles, sph.Count(), sph_zone);
         sph.Step(sph_dt);
+        // Detect crossings and accumulate flux.
+        sph_flux_tracker.AfterStep(sph.particles, sph.Count(), sph_zone, sph_dt);
         ++total_fine_steps;
 
         // 5. LBM sub-substeps (fixed dt from lattice relaxation time).
@@ -288,6 +303,10 @@ struct WaterEngine {
           }
         }
       }
+
+      // Berger-Colella flux correction: reconcile SWE and SPH fluxes.
+      LODTransition::CorrectSWESPHInterface(
+        swe, sph, swe_flux, sph_flux_tracker, sph_zone, master_dt);
     }
 
     sim_time += master_dt;

@@ -25,6 +25,7 @@
 #include "mjwater/lbm.h"
 #include "mjwater/stokes.h"
 #include "mjwater/lod_manager.h"
+#include "mjwater/flux_register.h"
 
 namespace mjwater {
 
@@ -519,6 +520,104 @@ struct LODTransition {
     float factor = target_volume / current;
     for (size_t idx : cells_in_region) h[idx] *= factor;
     return factor;
+  }
+
+  // --- Berger-Colella flux correction at SWE-SPH interface ---
+  //
+  // After all SPH substeps complete, compare:
+  //   - SWE interface flux: what the SWE grid thinks crossed the SPH boundary
+  //   - SPH particle flux: what particles actually crossed the boundary
+  //
+  // The difference is the conservation error. Distribute it as a uniform
+  // correction to SPH particles near the boundary and to the SWE cells
+  // at the interface.
+  //
+  // swe_flux: from ShallowWaterSolver::ComputeInterfaceFluxes(sph_zone)
+  // sph_tracker: accumulated particle crossings from SPHFluxTracker
+  // master_dt: the total time over which fluxes were accumulated
+
+  static void CorrectSWESPHInterface(
+      ShallowWaterSolver& swe,
+      SPHSolver& sph,
+      const SWEInterfaceFlux& swe_flux,
+      const SPHFluxTracker& sph_tracker,
+      const AABB& sph_zone,
+      float master_dt) {
+    if (master_dt < 1e-12f) return;
+
+    // Mass flux mismatch: what SWE transported in minus what SPH received.
+    // swe_flux.net_mass is in [m^2/s] (depth flux), scale to mass:
+    float cell_area = swe.grid.dx * swe.grid.dx;
+    float swe_mass_flux = swe_flux.net_mass * master_dt * cell_area * kWaterDensity;
+    float sph_mass_flux = sph_tracker.accumulated_mass;
+
+    float mass_err = swe_mass_flux - sph_mass_flux;
+
+    // Skip correction if error is negligible.
+    if (std::abs(mass_err) < 1e-8f) return;
+
+    // Distribute correction to SPH particles near the boundary.
+    // Apply a uniform mass adjustment to particles within one smoothing
+    // length of the boundary (these are the particles most affected by
+    // the ghost zone blending).
+    float h_sph = sph.params.smoothing_length;
+    AABB inner = {
+      {sph_zone.min.x + h_sph, sph_zone.min.y + h_sph, sph_zone.min.z},
+      {sph_zone.max.x - h_sph, sph_zone.max.y - h_sph, sph_zone.max.z}
+    };
+
+    uint32_t n_boundary_particles = 0;
+    float total_boundary_mass = 0;
+    for (uint32_t i = 0; i < sph.Count(); ++i) {
+      Vec3 p = sph.particles[i].pos;
+      bool in_zone = SPHFluxTracker::IsInside(p, sph_zone);
+      bool in_inner = SPHFluxTracker::IsInside(p, inner);
+      if (in_zone && !in_inner) {
+        ++n_boundary_particles;
+        total_boundary_mass += sph.particles[i].mass;
+      }
+    }
+
+    if (n_boundary_particles == 0 || total_boundary_mass < 1e-10f) return;
+
+    // Scale factor: adjust boundary particle masses to absorb the error.
+    float correction_factor = 1.0f + mass_err / total_boundary_mass;
+    // Clamp to prevent extreme corrections (safety).
+    correction_factor = std::clamp(correction_factor, 0.95f, 1.05f);
+
+    for (uint32_t i = 0; i < sph.Count(); ++i) {
+      Vec3 p = sph.particles[i].pos;
+      bool in_zone = SPHFluxTracker::IsInside(p, sph_zone);
+      bool in_inner = SPHFluxTracker::IsInside(p, inner);
+      if (in_zone && !in_inner) {
+        sph.particles[i].mass *= correction_factor;
+      }
+    }
+
+    // Momentum correction: apply velocity offset to boundary particles.
+    Vec3 swe_mom_flux = {
+      swe_flux.net_momentum_x * master_dt * cell_area * kWaterDensity,
+      swe_flux.net_momentum_y * master_dt * cell_area * kWaterDensity,
+      0
+    };
+    Vec3 mom_err = swe_mom_flux - sph_tracker.accumulated_momentum;
+    if (mom_err.Length() > 1e-8f && total_boundary_mass > 1e-10f) {
+      Vec3 vel_offset = mom_err / total_boundary_mass;
+      // Clamp velocity correction to 10% of max particle speed.
+      float max_correction = 0.1f * sph.ComputeMaxSpeed();
+      float correction_mag = vel_offset.Length();
+      if (correction_mag > max_correction && correction_mag > 0) {
+        vel_offset = vel_offset * (max_correction / correction_mag);
+      }
+      for (uint32_t i = 0; i < sph.Count(); ++i) {
+        Vec3 p = sph.particles[i].pos;
+        bool in_zone = SPHFluxTracker::IsInside(p, sph_zone);
+        bool in_inner = SPHFluxTracker::IsInside(p, inner);
+        if (in_zone && !in_inner) {
+          sph.particles[i].vel += vel_offset;
+        }
+      }
+    }
   }
 };
 

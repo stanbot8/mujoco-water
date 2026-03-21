@@ -299,6 +299,15 @@ struct SPHSolver {
     return kernel_sum >= threshold;
   }
 
+  // Maximum particle speed in the system.
+  float ComputeMaxSpeed() const {
+    float max_vel = 0;
+    for (const auto& p : particles) {
+      max_vel = std::max(max_vel, p.vel.Length());
+    }
+    return max_vel;
+  }
+
   // CFL-limited timestep.
   float ComputeMaxDt() const {
     float max_vel = 0;

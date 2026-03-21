@@ -69,6 +69,13 @@ struct ShallowWaterParams {
   float breaking_froude = 1.0f;
 };
 
+// Interface flux result for conservative coupling.
+struct SWEInterfaceFlux {
+  float net_mass = 0;
+  float net_momentum_x = 0;
+  float net_momentum_y = 0;
+};
+
 struct ShallowWaterSolver {
   HeightField grid;
   ShallowWaterParams params;
@@ -233,36 +240,25 @@ struct ShallowWaterSolver {
     }
   }
 
- private:
-  // Minmod slope limiter for MUSCL reconstruction.
-  static float Minmod(float a, float b) {
-    if (a * b <= 0) return 0;
-    return (a > 0) ? std::min(a, b) : std::max(a, b);
-  }
-
-  // HLL flux in x-direction.
-  // State: q = (h, hu, hv). Flux: f = (hu, hu^2 + gh^2/2, hu*v).
+  // HLL flux state: q = (h, hu, hv). Flux: f = (hu, hu^2 + gh^2/2, hu*v).
   struct State { float h, hu, hv; };
 
+  // HLL approximate Riemann solver (public for use by interface flux computation).
   static void HLLFlux(State qL, State qR, float g,
                        float min_depth, float& fh, float& fhu, float& fhv) {
-    // Left state
     float hL = std::max(qL.h, min_depth);
     float uL = (hL > min_depth) ? qL.hu / hL : 0.0f;
     float vL = (hL > min_depth) ? qL.hv / hL : 0.0f;
     float cL = std::sqrt(g * hL);
 
-    // Right state
     float hR = std::max(qR.h, min_depth);
     float uR = (hR > min_depth) ? qR.hu / hR : 0.0f;
     float vR = (hR > min_depth) ? qR.hv / hR : 0.0f;
     float cR = std::sqrt(g * hR);
 
-    // Wave speed estimates (Davis)
     float sL = std::min(uL - cL, uR - cR);
     float sR = std::max(uL + cL, uR + cR);
 
-    // Fluxes
     float fLh  = qL.hu;
     float fLhu = qL.hu * uL + 0.5f * g * hL * hL;
     float fLhv = qL.hu * vL;
@@ -281,6 +277,12 @@ struct ShallowWaterSolver {
       fhu = (sR * fLhu - sL * fRhu + sL * sR * (qR.hu - qL.hu)) * inv;
       fhv = (sR * fLhv - sL * fRhv + sL * sR * (qR.hv - qL.hv)) * inv;
     }
+  }
+
+ private:
+  static float Minmod(float a, float b) {
+    if (a * b <= 0) return 0;
+    return (a > 0) ? std::min(a, b) : std::max(a, b);
   }
 
   // Generic directional sweep with MUSCL reconstruction.
@@ -449,5 +451,77 @@ struct ShallowWaterSolver {
     }
   }
 };
+
+// Free function to avoid MSVC access bug with members defined after
+// template methods in structs.
+inline SWEInterfaceFlux ComputeSWEInterfaceFluxes(
+    const ShallowWaterSolver& swe, const AABB& region) {
+  SWEInterfaceFlux result;
+  const auto& h  = swe.grid.channels[swe.ch_h].data;
+  const auto& hu = swe.grid.channels[swe.ch_hu].data;
+  const auto& hv = swe.grid.channels[swe.ch_hv].data;
+  float g = swe.params.gravity;
+
+  int x0 = std::max(0, static_cast<int>((region.min.x - swe.grid.origin_x) / swe.grid.dx));
+  int y0 = std::max(0, static_cast<int>((region.min.y - swe.grid.origin_y) / swe.grid.dx));
+  int x1 = std::min(static_cast<int>(swe.grid.nx) - 1,
+                    static_cast<int>((region.max.x - swe.grid.origin_x) / swe.grid.dx));
+  int y1 = std::min(static_cast<int>(swe.grid.ny) - 1,
+                    static_cast<int>((region.max.y - swe.grid.origin_y) / swe.grid.dx));
+
+  using State = ShallowWaterSolver::State;
+
+  for (int j = y0; j <= y1; ++j) {
+    if (x0 > 0) {
+      size_t iL = swe.grid.Idx(static_cast<uint32_t>(x0 - 1), static_cast<uint32_t>(j));
+      size_t iR = swe.grid.Idx(static_cast<uint32_t>(x0), static_cast<uint32_t>(j));
+      State qL = {h[iL], hu[iL], hv[iL]};
+      State qR = {h[iR], hu[iR], hv[iR]};
+      float fh, fhu_, fhv_;
+      ShallowWaterSolver::HLLFlux(qL, qR, g, swe.params.min_depth, fh, fhu_, fhv_);
+      result.net_mass += fh;
+      result.net_momentum_x += fhu_;
+      result.net_momentum_y += fhv_;
+    }
+    if (x1 + 1 < static_cast<int>(swe.grid.nx)) {
+      size_t iL = swe.grid.Idx(static_cast<uint32_t>(x1), static_cast<uint32_t>(j));
+      size_t iR = swe.grid.Idx(static_cast<uint32_t>(x1 + 1), static_cast<uint32_t>(j));
+      State qL = {h[iL], hu[iL], hv[iL]};
+      State qR = {h[iR], hu[iR], hv[iR]};
+      float fh, fhu_, fhv_;
+      ShallowWaterSolver::HLLFlux(qL, qR, g, swe.params.min_depth, fh, fhu_, fhv_);
+      result.net_mass -= fh;
+      result.net_momentum_x -= fhu_;
+      result.net_momentum_y -= fhv_;
+    }
+  }
+
+  for (int i = x0; i <= x1; ++i) {
+    if (y0 > 0) {
+      size_t iB = swe.grid.Idx(static_cast<uint32_t>(i), static_cast<uint32_t>(y0 - 1));
+      size_t iT = swe.grid.Idx(static_cast<uint32_t>(i), static_cast<uint32_t>(y0));
+      State qB = {h[iB], hv[iB], hu[iB]};
+      State qT = {h[iT], hv[iT], hu[iT]};
+      float fh, fhv_f, fhu_f;
+      ShallowWaterSolver::HLLFlux(qB, qT, g, swe.params.min_depth, fh, fhv_f, fhu_f);
+      result.net_mass += fh;
+      result.net_momentum_x += fhu_f;
+      result.net_momentum_y += fhv_f;
+    }
+    if (y1 + 1 < static_cast<int>(swe.grid.ny)) {
+      size_t iB = swe.grid.Idx(static_cast<uint32_t>(i), static_cast<uint32_t>(y1));
+      size_t iT = swe.grid.Idx(static_cast<uint32_t>(i), static_cast<uint32_t>(y1 + 1));
+      State qB = {h[iB], hv[iB], hu[iB]};
+      State qT = {h[iT], hv[iT], hu[iT]};
+      float fh, fhv_f, fhu_f;
+      ShallowWaterSolver::HLLFlux(qB, qT, g, swe.params.min_depth, fh, fhv_f, fhu_f);
+      result.net_mass -= fh;
+      result.net_momentum_x -= fhu_f;
+      result.net_momentum_y -= fhv_f;
+    }
+  }
+
+  return result;
+}
 
 }  // namespace mjwater
