@@ -1,0 +1,105 @@
+sources:
+  # --- Coupling / Hydrodynamics ---
+  - id: dnv-rp-c205_2021
+    title: "Environmental Conditions and Environmental Loads"
+    authors: "DNV GL"
+    year: 2021
+    no_doi: true
+    note: "Industry standard, available from DNV website"
+
+  - id: lamb1932
+    title: "Hydrodynamics"
+    authors: "Lamb, H."
+    year: 1932
+    no_doi: true
+    isbn: "978-0486602561"
+
+  - id: clift1978
+    title: "Bubbles, Drops, and Particles"
+    authors: "Clift, R. and Grace, J.R. and Weber, M.E."
+    year: 1978
+    no_doi: true
+    isbn: "978-0486445809"
+
+  - id: zdravkovich1997
+    title: "Flow around Circular Cylinders"
+    authors: "Zdravkovich, M.M."
+    year: 1997
+    no_doi: true
+    isbn: "978-0198563969"
+
+  - id: sarpkaya1976
+    title: "Vortex Shedding and Resistance in Harmonic Flow about Smooth and Rough Circular Cylinders at High Reynolds Numbers"
+    authors: "Sarpkaya, T."
+    year: 1976
+    no_doi: true
+    note: "Naval Postgraduate School Report NPS-59SL76021, DTIC ADA024505"
+
+  - id: wehausen1973
+    title: "The Wave Resistance of Ships"
+    authors: "Wehausen, J.V."
+    year: 1973
+    doi: "10.1016/S0065-2156(08)70144-3"
+
+  # --- Flux / AMR ---
+  - id: berger-colella1989
+    cite_key: berger-colella1989
+    title: "Local Adaptive Mesh Refinement for Shock Hydrodynamics"
+    authors: "Berger, M.J. and Colella, P."
+    year: 1989
+    doi: "10.1016/0021-9991(89)90035-1"
+
+  # --- LBM ---
+  - id: kruger2017
+    title: "The Lattice Boltzmann Method: Principles and Practice"
+    authors: "Kruger, T. and Kusumaatmaja, H. and Kuzmin, A. and Shardt, O. and Silva, G. and Viggen, E.M."
+    year: 2017
+    doi: "10.1007/978-3-319-44649-3"
+
+  # --- Shallow Water ---
+  - id: davis1988
+    title: "Simplified Second-Order Godunov-Type Methods"
+    authors: "Davis, S.F."
+    year: 1988
+    doi: "10.1137/0909030"
+
+  - id: battjes-janssen1978
+    cite_key: battjes-janssen1978
+    title: "Energy Loss and Set-Up Due to Breaking of Random Waves"
+    authors: "Battjes, J.A. and Janssen, J.P.F.M."
+    year: 1978
+    doi: "10.1061/9780872621909.034"
+
+  # --- Spectral Ocean ---
+  - id: phillips1957
+    title: "On the generation of waves by turbulent wind"
+    authors: "Phillips, O.M."
+    year: 1957
+    doi: "10.1017/S0022112057000233"
+
+  - id: gerstner1802
+    title: "Theorie der Wellen"
+    authors: "Gerstner, F.J."
+    year: 1802
+    no_doi: true
+    note: "Abhandlungen der koniglichen bohmischen Gesellschaft der Wissenschaften"
+
+  - id: jonsson1990
+    title: "Wave-current interactions"
+    authors: "Jonsson, I.G."
+    year: 1990
+    no_doi: true
+    note: "In: The Sea, vol. 9, Ocean Engineering Science, Wiley"
+
+  # --- SPH ---
+  - id: wendland1995
+    title: "Piecewise polynomial, positive definite and compactly supported radial functions of minimal degree"
+    authors: "Wendland, H."
+    year: 1995
+    doi: "10.1007/BF02123482"
+
+  - id: dehnen2012
+    title: "Improving convergence in smoothed particle hydrodynamics simulations without pairing instability"
+    authors: "Dehnen, W. and Aly, H."
+    year: 2012
+    doi: "10.1111/j.1365-2966.2012.21439.x"

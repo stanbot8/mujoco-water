@@ -1,0 +1,223 @@
+# Canonical reference values for mujoco-water source fidelity checking.
+#
+# Every verifiable claim in the C++ headers gets an entry here with:
+#   - The expected value and tolerance
+#   - The file and regex pattern to extract it
+#   - The published source (author, year, specific table/equation)
+#
+# This file is the single source of truth. If a value here disagrees
+# with the code, the checker fails. If a value here disagrees with
+# the reference, this file is wrong and must be corrected.
+#
+# Run: python scripts/check_sources.py
+
+physical_constants:
+  - name: gravity
+    file: types.h
+    pattern: 'constexpr float kGravity = ([^;]+?)f;'
+    value: 9.80665
+    tolerance: 0.00001
+    unit: m/s^2
+    source: "NIST CODATA 2018, standard acceleration of gravity"
+
+  - name: water_density
+    file: types.h
+    pattern: 'constexpr float kWaterDensity = ([^;]+?)f;'
+    value: 998.2
+    tolerance: 0.5
+    unit: kg/m^3
+    source: "CRC Handbook 97th ed, Table 6-1, water at 20C 1atm"
+
+  - name: water_kinematic_viscosity
+    file: types.h
+    pattern: 'constexpr float kWaterViscosity = ([^;]+?)f;'
+    value: 1.004e-6
+    tolerance: 0.01e-6
+    unit: m^2/s
+    source: "CRC Handbook 97th ed, Table 6-2, water at 20C"
+
+  - name: pi
+    file: types.h
+    pattern: 'constexpr float kPi = ([^;]+?)f;'
+    value: 3.14159265358979
+    tolerance: 1.0e-6
+    source: "mathematical constant (float32 precision limit)"
+
+  - name: surface_tension_water_20C
+    file: sph.h
+    pattern: 'surface_tension = ([^;]+?)f;'
+    value: 0.0728
+    tolerance: 0.001
+    unit: N/m
+    source: "CRC Handbook 97th ed, Table 6-3; Vargaftik et al. (1983)"
+
+lattice_d3q19:
+  # D3Q19 lattice weights (Kruger et al. 2017, Table 3.1)
+  weights:
+    rest: 0.333333333       # 1/3
+    face: 0.055555556       # 1/18
+    edge: 0.027777778       # 1/36
+    count_rest: 1
+    count_face: 6
+    count_edge: 12
+    sum: 1.0
+    source: "Kruger et al. (2017) Table 3.1, eq. 3.60"
+
+  cs_squared:
+    value: 0.333333333
+    source: "Kruger et al. (2017) eq. 3.62: c_s^2 = 1/3 for all DdQq lattices"
+
+  # Structural checks (no numeric value, verified programmatically)
+  structural:
+    - "Velocity vectors: 1 rest (|e|=0) + 6 face (|e|=1) + 12 edge (|e|=sqrt(2))"
+    - "Sum of all velocity vectors = (0, 0, 0)"
+    - "Opposite index is an involution: kOpp[kOpp[i]] = i"
+    - "Opposite reverses direction: e[kOpp[i]] = -e[i]"
+    - "Second-order isotropy: sum(w_i * e_ia * e_ib) = (1/3) * delta_ab"
+
+  source_structural: "Kruger et al. (2017) Section 3.4"
+
+kernel_wendland_c2:
+  normalization_3d:
+    coefficient: 0.41778173    # 21 / (16*pi), support radius H = 2h
+    tolerance: 0.001
+    source: "Wendland (1995) Theorem 1, d=3 k=2; Dehnen & Aly (2012) Table 1"
+
+  # Numerical integration: integral of W(r)*4*pi*r^2 dr from 0 to 2h = 1.0
+  integration_tolerance: 0.001
+  source: "Wendland (1995); Monaghan (2005) Appendix A"
+
+sphere_drag:
+  # Cd vs Re reference data (Clift, Grace, Weber 1978, Table 5.2)
+  # Also: DNV-RP-C205 (2021) Table 6-4
+  data_points:
+    - { Re:    0.1, Cd:  240.0,  tolerance_pct: 5 }
+    - { Re:    1.0, Cd:   27.6,  tolerance_pct: 5 }   # S-N: 24*(1+0.15*1^0.687)=27.6
+    - { Re:   10.0, Cd:    4.12, tolerance_pct: 10 }
+    - { Re:  100.0, Cd:    1.09, tolerance_pct: 10 }
+    - { Re:  500.0, Cd:    0.55, tolerance_pct: 10 }
+    - { Re: 1000.0, Cd:    0.44, tolerance_pct: 5 }
+    - { Re: 5000.0, Cd:    0.44, tolerance_pct: 5 }
+    - { Re: 1.0e5,  Cd:    0.44, tolerance_pct: 5 }
+    - { Re: 3.0e5,  Cd:    0.10, tolerance_pct: 20 }
+    - { Re: 1.0e6,  Cd:    0.10, tolerance_pct: 20 }
+  source: "Clift, Grace, Weber (1978) Table 5.2; Schiller & Naumann (1935)"
+
+cylinder_drag:
+  data_points:
+    - { Re:    0.05, Cd: 100.0, tolerance_pct: 50 }
+    - { Re:    0.5,  Cd:  14.1, tolerance_pct: 20 }
+    - { Re: 2000.0,  Cd:   1.2, tolerance_pct: 10 }
+    - { Re: 3.0e5,   Cd:   0.3, tolerance_pct: 30 }
+    - { Re: 1.0e6,   Cd:   0.6, tolerance_pct: 30 }
+  source: "Zdravkovich (1997) Fig 1.6; DNV-RP-C205 (2021) Table 6-3"
+
+sphere_inertia:
+  # Cm = 1 + Ca for sphere in oscillatory flow (Sarpkaya 1976)
+  data_points:
+    - { KC:  1.0, Cm: 1.50, tolerance: 0.05 }
+    - { KC:  3.0, Cm: 1.50, tolerance: 0.05 }
+    - { KC:  9.0, Cm: 1.30, tolerance: 0.10 }
+    - { KC: 20.0, Cm: 1.10, tolerance: 0.05 }
+    - { KC: 50.0, Cm: 1.10, tolerance: 0.05 }
+  source: "Sarpkaya (1976); DNV-RP-C205 (2021) Section 6.7"
+
+dispersion:
+  # omega^2 = g * k * tanh(k * d)
+  check_points:
+    - { k: 0.1,  d: 1000, note: "deep water" }
+    - { k: 1.0,  d: 1000, note: "deep water" }
+    - { k: 1.0,  d: 0.5,  note: "finite depth" }
+    - { k: 0.1,  d: 2.0,  note: "finite depth" }
+  tolerance: 0.01
+  source: "Airy (1845); Dean & Dalrymple (1991) eq. 3.10"
+
+spectral:
+  phillips_constant:
+    file: spectral_ocean.h
+    pattern: 'kPhillipsA = ([^;]+?)f;'
+    value: 4.0e-3
+    range: [3.0e-3, 8.0e-3]
+    source: "Phillips (1957): A ~ 8.1e-3; Tessendorf (2001): 4e-3 common for rendering"
+
+  jonswap_sigma:
+    values: [0.07, 0.09]
+    source: "Hasselmann et al. (1973) JONSWAP report"
+
+  jonswap_gamma_default:
+    value: 3.3
+    source: "Hasselmann et al. (1973): mean gamma = 3.3 from North Sea data"
+
+  pierson_moskowitz_peak_coeff:
+    value: 0.877
+    tolerance: 0.01
+    source: "Pierson & Moskowitz (1964) eq. 17"
+
+cfl_conditions:
+  sph:
+    formula: "CFL * h / (c_s + v_max)"
+    default_cfl: 0.25
+    source: "Monaghan (2005) eq. 4.18"
+
+  stokes:
+    formula: "safety * dx^2 / nu, where safety < 1/6"
+    code_safety: 0.15
+    theoretical_limit: 0.166667    # 1/6
+    source: "von Neumann stability analysis, 3D explicit diffusion"
+
+  swe:
+    formula: "CFL * dx / max(|u|+c, |v|+c)"
+    default_cfl: 0.45
+    source: "Toro (2001) Section 5.4"
+
+  lbm_tau_min:
+    value: 0.5
+    note: "tau = 0.5 is stability boundary; code uses default 0.8"
+    source: "Kruger et al. (2017) Section 3.5.2"
+
+lbm_formulas:
+  trt_magic:
+    value: 0.25
+    source: "Ginzburg (2005): Lambda = 1/4 for exact bounce-back wall position"
+
+  viscosity_conversion:
+    formula: "nu_phys = dx^2 * (tau - 0.5) / (3 * dt)"
+    source: "Kruger et al. (2017) eq. 3.5.26"
+
+  guo_half_force:
+    description: "u_eq = u + F*0.5 (half-force velocity correction)"
+    source: "Guo et al. (2002) eq. 20"
+
+  guo_source_prefactor:
+    formula: "(1 - omega/2)"
+    source: "Guo et al. (2002) eq. 22"
+
+tait_eos:
+  gamma: 7
+  formula: "P = B * ((rho/rho0)^gamma - 1), B = rho0 * c_s^2 / gamma"
+  source: "Becker & Teschner (2007) eq. 4; Cole (1948)"
+
+manning_friction:
+  default_n: 0.025
+  tolerance: 0.005
+  formula: "S_f = g * n^2 * |u| / h^(4/3)"
+  source: "Manning (1891); Chow (1959) Table 5-6"
+
+thruster_efficiency:
+  # Wageningen B-series (simplified) bollard pull efficiency
+  bollard_eta: 0.50
+  peak_eta: 0.65
+  peak_J: 0.7
+  windmill_J: 1.2
+  source: "Carlton (2012); Bernitsas et al. (1981) B4-70 series"
+
+lifting_surface:
+  thin_airfoil_slope:
+    value: 6.283185     # 2*pi
+    tolerance: 0.01
+    source: "Kutta-Joukowski theorem; Abbott & Von Doenhoff (1959)"
+
+  flat_plate_stall:
+    value_rad: 0.15     # ~9 degrees
+    range_rad: [0.10, 0.20]
+    source: "Hoerner (1965) Ch. 4; experimental flat plate data"
