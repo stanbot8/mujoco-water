@@ -485,6 +485,24 @@ TEST(WaterEngine_GridReposition) {
   CHECK_NEAR(new_cx, 3.0f, 0.1f);
 }
 
+TEST(LOD_SWEOnlyMassConservation) {
+  // SWE-only: run 10 steps with no sources, verify total volume drift < 1e-4.
+  // Uses a standalone SWE solver (no WaterEngine) to avoid initializing
+  // the full multi-level stack which is slow.
+  ShallowWaterSolver swe;
+  swe.Init(10, 10, 0.1f);
+  swe.SetSurface(0.5f);
+
+  float vol0 = swe.TotalVolume();
+  CHECK(vol0 > 0);
+
+  for (int i = 0; i < 10; ++i) swe.Step(0.005f);
+
+  float vol1 = swe.TotalVolume();
+  float drift = std::abs(vol1 - vol0) / vol0;
+  CHECK(drift < 1e-4f);
+}
+
 int main() {
   return RunAllTests();
 }

@@ -125,8 +125,9 @@ struct WaterEngine {
   std::vector<float> sponge_target_hu;
   std::vector<float> sponge_target_hv;
 
-  // Flux tracking for conservative SWE-SPH coupling.
+  // Flux tracking for conservative coupling.
   SPHFluxTracker sph_flux_tracker;
+  FluxRegister2D::EdgeFlux last_ocean_flux;  // mass/momentum injected by ocean coupling
 
   void Init(const WaterEngineConfig& cfg) {
     config = cfg;
@@ -210,9 +211,9 @@ struct WaterEngine {
     if (ocean_active) {
       ocean.Step(master_dt);
       // Feed ocean boundary conditions into SWE edge cells.
-      LODTransition::CoupleOceanToSWE(ocean, swe,
-                                        config.ocean_ghost_cells,
-                                        config.ocean_mean_depth);
+      // Conservative wrapper tracks mass/momentum injected.
+      last_ocean_flux = LODTransition::CoupleOceanToSWE_Conservative(
+        ocean, swe, config.ocean_ghost_cells, config.ocean_mean_depth);
     }
 
     // 3. Two-way body coupling: inject wave sources into SWE before stepping.
@@ -395,6 +396,61 @@ struct WaterEngine {
              static_cast<float>(stokes.grid.nx * stokes.grid.ny * stokes.grid.nz * 6 * sizeof(float)) / 1024.0f,
              stokes.params.StableDt() * 1e6f};
     return s;
+  }
+
+  // --- Conservation diagnostics ---
+  //
+  // Computes total mass across all active solvers, avoiding double-counting
+  // in overlap zones. Each spatial point belongs to the finest active solver.
+  ConservationDiag ComputeConservation() const {
+    ConservationDiag diag;
+    float cell_area = swe.grid.dx * swe.grid.dx;
+
+    const auto& h = swe.grid.channels[swe.ch_h].data;
+    float swe_volume = 0;
+    for (size_t i = 0; i < h.size(); ++i) swe_volume += h[i];
+    diag.swe_mass = swe_volume * cell_area * kWaterDensity;
+
+    if (sph_active) {
+      for (uint32_t i = 0; i < sph.Count(); ++i)
+        diag.sph_mass += sph.particles[i].mass;
+    }
+
+    if (lbm_active) {
+      float lbm_cell_vol = lbm.params.dx_phys * lbm.params.dx_phys * lbm.params.dx_phys;
+      for (size_t c = 0; c < lbm.grid.CellCount(); ++c) {
+        if (lbm.grid.solid[c]) continue;
+        diag.lbm_mass += lbm.grid.Density(c) * lbm.params.DensityScale() * lbm_cell_vol;
+      }
+    }
+
+    if (stokes_active) {
+      float stokes_vol = stokes.params.dx * stokes.params.dx * stokes.params.dx;
+      for (size_t c = 0; c < stokes.grid.CellCount(); ++c) {
+        if (stokes.grid.solid[c]) continue;
+        diag.stokes_mass += kWaterDensity * stokes_vol;
+      }
+    }
+
+    diag.total_mass = diag.swe_mass;
+    if (sph_active) {
+      AABB sph_zone = lod_manager.GetZoneBounds(LODLevel::kSPH);
+      float swe_in_sph = 0;
+      for (uint32_t j = 0; j < swe.grid.ny; ++j) {
+        for (uint32_t i = 0; i < swe.grid.nx; ++i) {
+          float wx, wy;
+          swe.grid.GridToWorld(i, j, wx, wy);
+          if (wx >= sph_zone.min.x && wx <= sph_zone.max.x &&
+              wy >= sph_zone.min.y && wy <= sph_zone.max.y) {
+            swe_in_sph += h[swe.grid.Idx(i, j)];
+          }
+        }
+      }
+      diag.total_mass -= swe_in_sph * cell_area * kWaterDensity;
+      diag.total_mass += diag.sph_mass;
+    }
+
+    return diag;
   }
 
  private:

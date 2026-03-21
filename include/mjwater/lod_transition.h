@@ -375,6 +375,43 @@ struct LODTransition {
     }
   }
 
+  // Conservative wrapper: measures mass/momentum injected by ocean coupling.
+  // Returns the net flux for diagnostics (not used for correction since
+  // ocean is the analytic truth at the boundary).
+  static FluxRegister2D::EdgeFlux CoupleOceanToSWE_Conservative(
+      const SpectralOceanSolver& ocean, ShallowWaterSolver& swe,
+      int ghost_cells, float mean_depth) {
+    // Snapshot mass before.
+    auto& h  = swe.grid.channels[swe.ch_h].data;
+    auto& hu = swe.grid.channels[swe.ch_hu].data;
+    auto& hv = swe.grid.channels[swe.ch_hv].data;
+    float cell_area = swe.grid.dx * swe.grid.dx;
+
+    float mass_before = 0, mom_x_before = 0, mom_y_before = 0;
+    for (size_t i = 0; i < h.size(); ++i) {
+      mass_before += h[i];
+      mom_x_before += hu[i];
+      mom_y_before += hv[i];
+    }
+
+    // Apply coupling.
+    CoupleOceanToSWE(ocean, swe, ghost_cells, mean_depth);
+
+    // Measure delta.
+    float mass_after = 0, mom_x_after = 0, mom_y_after = 0;
+    for (size_t i = 0; i < h.size(); ++i) {
+      mass_after += h[i];
+      mom_x_after += hu[i];
+      mom_y_after += hv[i];
+    }
+
+    return {
+      (mass_after - mass_before) * cell_area * kWaterDensity,
+      (mom_x_after - mom_x_before) * cell_area * kWaterDensity,
+      (mom_y_after - mom_y_before) * cell_area * kWaterDensity
+    };
+  }
+
   // --- LBM -> Stokes: Initialize Stokes grid from LBM fields ---
   //
   // Copies velocity and pressure from LBM to a Stokes grid that covers
