@@ -308,6 +308,69 @@ struct SPHSolver {
     return max_vel;
   }
 
+  // Interpolate density and velocity at an arbitrary world position using
+  // the SPH kernel. Returns false if no particles are within support.
+  bool InterpolateFields(Vec3 pos, float& rho_out, Vec3& vel_out) const {
+    float rho = 0;
+    Vec3 vel{};
+    float w_sum = 0;
+
+    hash.ForEachNeighbor(pos, kernel.support, [&](uint32_t idx) {
+      const auto& p = particles[idx];
+      float dist = (pos - p.pos).Length();
+      float w = kernel.W(dist);
+      rho += p.mass * w;
+      vel += p.vel * (p.mass * w / std::max(p.density, 1e-6f));
+      w_sum += w;
+    });
+
+    if (w_sum < 1e-10f) return false;
+    rho_out = rho;
+    vel_out = vel;
+    return true;
+  }
+
+  // Interpolate the viscous stress tensor at a world position.
+  // The stress tensor is approximated from the SPH velocity gradient:
+  //   sigma_ab = sum_j m_j/rho_j * (v_a_j - v_a_i) * dW/dr * r_b / |r|
+  // Returns the 6 independent components of the symmetric 3x3 tensor.
+  // Returns false if no particles are within support.
+  struct StressTensor {
+    float xx = 0, yy = 0, zz = 0;
+    float xy = 0, xz = 0, yz = 0;
+  };
+
+  bool InterpolateStressTensor(Vec3 pos, Vec3 vel_at_pos,
+                                StressTensor& stress_out) const {
+    stress_out = {};
+    bool found = false;
+
+    hash.ForEachNeighbor(pos, kernel.support, [&](uint32_t idx) {
+      const auto& p = particles[idx];
+      Vec3 r = pos - p.pos;
+      float dist = r.Length();
+      if (dist < 1e-10f) return;
+
+      float dw = kernel.DW(dist);
+      Vec3 r_hat = r / dist;
+      float coeff = p.mass / std::max(p.density, 1e-6f) * dw / dist;
+
+      // Velocity difference.
+      Vec3 dv = p.vel - vel_at_pos;
+
+      // Outer product contribution: sigma_ab += coeff * dv_a * r_b
+      stress_out.xx += coeff * dv.x * r.x;
+      stress_out.yy += coeff * dv.y * r.y;
+      stress_out.zz += coeff * dv.z * r.z;
+      stress_out.xy += coeff * 0.5f * (dv.x * r.y + dv.y * r.x);
+      stress_out.xz += coeff * 0.5f * (dv.x * r.z + dv.z * r.x);
+      stress_out.yz += coeff * 0.5f * (dv.y * r.z + dv.z * r.y);
+      found = true;
+    });
+
+    return found;
+  }
+
   // CFL-limited timestep.
   float ComputeMaxDt() const {
     float max_vel = 0;

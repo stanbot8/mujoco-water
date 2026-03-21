@@ -237,13 +237,22 @@ struct LODTransition {
   // --- Boundary coupling: SPH provides boundary conditions to LBM ---
   //
   // LBM cells near the edge of the LBM zone get distributions nudged
-  // toward equilibrium matching the SPH velocity/density field.
+  // toward f_eq + f_neq matching the SPH density, velocity, and stress.
+  // Second-order lifting (Kruger et al. 2017): the non-equilibrium part
+  // encodes the viscous stress tensor from SPH, preserving stress
+  // continuity across the interface.
   static void CoupleSPHToLBM(const SPHSolver& sph, LBMSolver& lbm,
                                int ghost_cells) {
+    float vel_scale = 1.0f / lbm.params.VelocityScale();
+    float rho_scale = 1.0f / lbm.params.DensityScale();
+    // Stress scale: physical stress -> lattice stress.
+    // sigma_lattice = sigma_phys * dt^2 / (rho_phys * dx^2)
+    float stress_scale = lbm.params.dt_phys * lbm.params.dt_phys /
+                         (lbm.params.DensityScale() * lbm.params.dx_phys * lbm.params.dx_phys);
+
     for (uint32_t z = 0; z < lbm.grid.nz; ++z) {
       for (uint32_t y = 0; y < lbm.grid.ny; ++y) {
         for (uint32_t x = 0; x < lbm.grid.nx; ++x) {
-          // Check if this cell is within ghost_cells of any boundary.
           int dist = std::min({
             static_cast<int>(x), static_cast<int>(lbm.grid.nx - 1 - x),
             static_cast<int>(y), static_cast<int>(lbm.grid.ny - 1 - y),
@@ -263,20 +272,58 @@ struct LODTransition {
           float rho_phys = sph.InterpolateDensity(pos);
           Vec3 vel_phys = sph.InterpolateVelocity(pos);
 
-          float rho_lattice = (rho_phys > 0)
-            ? rho_phys / lbm.params.DensityScale()
-            : 1.0f;
-          float vel_scale = 1.0f / lbm.params.VelocityScale();
+          float rho_lattice = (rho_phys > 0) ? rho_phys * rho_scale : 1.0f;
           Vec3 u_lattice = vel_phys * vel_scale;
 
-          // Blend: stronger at boundary, weaker deeper inside.
           float blend = GhostBlend(dist, ghost_cells);
 
+          // Equilibrium component.
           float feq[kQ];
           LBMSolver::Equilibrium(rho_lattice, u_lattice, feq);
+
+          // Non-equilibrium component from SPH stress tensor.
+          // f_neq_i = -w_i / (2 * cs^4) * Q_iab * Pi_neq_ab
+          // where Q_iab = e_ia * e_ib - cs^2 * delta_ab
+          SPHSolver::StressTensor stress;
+          bool has_stress = sph.InterpolateStressTensor(pos, vel_phys, stress);
+
           float* fi = lbm.grid.f_src.data() + c * kQ;
+          float inv_2cs4 = 1.0f / (2.0f * kCsSq * kCsSq);
+
           for (int i = 0; i < kQ; ++i) {
-            fi[i] += blend * (feq[i] - fi[i]);
+            float f_target = feq[i];
+
+            if (has_stress) {
+              // Convert physical stress to lattice units.
+              float sxx = stress.xx * stress_scale;
+              float syy = stress.yy * stress_scale;
+              float szz = stress.zz * stress_scale;
+              float sxy = stress.xy * stress_scale;
+              float sxz = stress.xz * stress_scale;
+              float syz = stress.yz * stress_scale;
+
+              // Q tensor components for direction i.
+              float ex = static_cast<float>(kEx[i]);
+              float ey = static_cast<float>(kEy[i]);
+              float ez = static_cast<float>(kEz[i]);
+              float qxx = ex * ex - kCsSq;
+              float qyy = ey * ey - kCsSq;
+              float qzz = ez * ez - kCsSq;
+              float qxy = ex * ey;
+              float qxz = ex * ez;
+              float qyz = ey * ez;
+
+              float f_neq = -kW[i] * inv_2cs4 *
+                (qxx * sxx + qyy * syy + qzz * szz +
+                 2.0f * (qxy * sxy + qxz * sxz + qyz * syz));
+
+              f_target += f_neq;
+            }
+
+            // Clamp to non-negative to prevent instability.
+            f_target = std::max(f_target, 0.0f);
+
+            fi[i] += blend * (f_target - fi[i]);
           }
         }
       }
@@ -374,11 +421,18 @@ struct LODTransition {
     }
   }
 
-  // --- Stokes -> LBM: Transfer Stokes velocity to LBM distributions ---
+  // --- Stokes -> LBM: Non-equilibrium extrapolation ---
   //
-  // For LBM cells that overlap with the Stokes domain, nudge distributions
-  // toward equilibrium matching the Stokes velocity field.
+  // For LBM cells that overlap with the Stokes domain, set distributions
+  // using the Stokes velocity/pressure for equilibrium, but preserve the
+  // non-equilibrium part from the nearest interior LBM cell. This maintains
+  // viscous stress continuity across the interface.
+  //
+  // f_boundary = feq(rho_stokes, u_stokes) + fneq_interior
+  // where fneq = f - feq at the interior cell.
   static void StokesToLBM(const StokesSolver& stokes, LBMSolver& lbm) {
+    float vel_scale_inv = 1.0f / lbm.params.VelocityScale();
+
     for (uint32_t z = 0; z < lbm.grid.nz; ++z) {
       for (uint32_t y = 0; y < lbm.grid.ny; ++y) {
         for (uint32_t x = 0; x < lbm.grid.nx; ++x) {
@@ -388,28 +442,42 @@ struct LODTransition {
           float wx, wy, wz;
           lbm.grid.GridToWorld(x, y, z, wx, wy, wz);
 
-          // Check if this LBM cell falls within the Stokes domain.
           uint32_t sx, sy, sz;
           if (!stokes.grid.WorldToGridCell(wx, wy, wz, sx, sy, sz)) continue;
 
           size_t sc = stokes.grid.Idx(sx, sy, sz);
           if (stokes.grid.solid[sc]) continue;
 
-          // Get Stokes velocity.
+          // Target state from Stokes.
           Vec3 vel_phys = {stokes.grid.u[sc], stokes.grid.v[sc],
                            stokes.grid.w[sc]};
+          Vec3 u_target = vel_phys * vel_scale_inv;
 
-          float rho_lattice = lbm.grid.Density(lc);
-          float vel_scale = 1.0f / lbm.params.VelocityScale();
-          Vec3 u_lattice = vel_phys * vel_scale;
+          // Use Stokes pressure for target density (p = rho * cs^2).
+          float p_stokes = stokes.grid.p[sc];
+          float p_scale = lbm.params.DensityScale() *
+                          lbm.params.VelocityScale() * lbm.params.VelocityScale();
+          float rho_target = 1.0f + p_stokes / (kCsSq * p_scale);
+          rho_target = std::max(rho_target, 0.5f);
 
-          // Blend toward equilibrium matching Stokes velocity (avoids
-          // velocity discontinuity that hard-set would produce).
-          float feq[kQ];
-          LBMSolver::Equilibrium(rho_lattice, u_lattice, feq);
+          // Compute target equilibrium.
+          float feq_target[kQ];
+          LBMSolver::Equilibrium(rho_target, u_target, feq_target);
+
+          // Extract non-equilibrium part from current LBM cell (interior
+          // extrapolation: use this cell's own fneq as best estimate).
           float* fi = lbm.grid.f_src.data() + lc * kQ;
-          constexpr float blend = 0.8f;  // strong but not instant
-          for (int i = 0; i < kQ; ++i) fi[i] += blend * (feq[i] - fi[i]);
+          float rho_current = lbm.grid.Density(lc);
+          Vec3 u_current = lbm.grid.Velocity(lc);
+          float feq_current[kQ];
+          LBMSolver::Equilibrium(rho_current, u_current, feq_current);
+
+          constexpr float blend = 0.8f;
+          for (int i = 0; i < kQ; ++i) {
+            float fneq = fi[i] - feq_current[i];
+            float f_target = std::max(feq_target[i] + fneq, 0.0f);
+            fi[i] += blend * (f_target - fi[i]);
+          }
         }
       }
     }

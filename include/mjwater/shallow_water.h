@@ -292,7 +292,7 @@ struct ShallowWaterSolver {
   // For y-sweep: primary = hv, transverse = hu, step along j with i fixed.
   template <typename IdxFn>
   void Sweep(float dt, uint32_t n_sweep, uint32_t n_perp,
-             IdxFn idx_fn, int ch_prim, int ch_trans) {
+             IdxFn idx_fn, size_t ch_prim, size_t ch_trans) {
     auto& h_data  = grid.channels[ch_h].data;
     auto& prim_data  = grid.channels[ch_prim].data;
     auto& trans_data = grid.channels[ch_trans].data;
