@@ -45,6 +45,29 @@ static float g_z_bottom = 30.0f;                   // hfield depth below origin
 static constexpr float kOceanFloorZ = -100.0f;     // visual ocean floor
 static constexpr float kPanelWidth = 300.0f;      // side panel width (mujoco-water convention)
 
+// ---- Helpers ----
+
+// Find all free-joint sphere bodies and create CoupledBody entries.
+static void InitCoupledBodies(mjModel* m, std::vector<CoupledBody>& bodies) {
+  bodies.clear();
+  for (int i = 1; i < m->nbody; ++i) {
+    int jnt = m->body_jntadr[i];
+    if (jnt < 0 || m->jnt_type[jnt] != 0) continue;  // 0 = mjJNT_FREE
+    int g = m->body_geomadr[i];
+    if (m->body_geomnum[i] <= 0) continue;
+    float r = static_cast<float>(m->geom_size[3*g]);
+    CoupledBody cb;
+    cb.body_id = i;
+    cb.radius = r;
+    cb.coupling.volume = (4.0f / 3.0f) * kPi * r * r * r;
+    cb.coupling.cross_section = kPi * r * r;
+    cb.coupling.shape = BodyShape::kSphere;
+    cb.coupling.two_way_enabled = true;
+    cb.coupling.body_radius = r;
+    bodies.push_back(cb);
+  }
+}
+
 // ---- Global state ----
 
 static bool g_lod_active[5] = {true, true, true, true, true};
@@ -662,8 +685,8 @@ static void DrawPanel(WaterEngine& engine, const WaterEngineConfig& cfg,
       if (w.amplitude > peak_amp) { peak_amp = w.amplitude; peak_omega = w.omega; }
     }
     Hs = 4.0f * std::sqrt(Hs);
-    float Tp = (peak_omega > 0) ? 2.0f * 3.14159f / peak_omega : 0;
-    float Lp = (Tp > 0) ? 9.81f * Tp * Tp / (2.0f * 3.14159f) : 0;
+    float Tp = (peak_omega > 0) ? kTwoPi / peak_omega : 0;
+    float Lp = (Tp > 0) ? 9.81f * Tp * Tp / (kTwoPi) : 0;
     ImGui::Text("Hs: %.2f m  Tp: %.1f s", Hs, Tp);
     ImGui::Text("Peak wavelength: %.0f m", Lp);
     ImGui::Text("Waves: %zu  Depth: %.0f m",
@@ -961,23 +984,7 @@ int main() {
   if (hfield_id < 0) { fprintf(stderr, "No hfield\n"); return 1; }
 
   std::vector<CoupledBody> coupled_bodies;
-  for (int i = 1; i < m->nbody; ++i) {
-    int jnt = m->body_jntadr[i];
-    if (jnt < 0 || m->jnt_type[jnt] != 0) continue;  // 0 = mjJNT_FREE
-    int g = m->body_geomadr[i];
-    if (m->body_geomnum[i] <= 0) continue;
-    float r = static_cast<float>(m->geom_size[3*g]);
-    CoupledBody cb;
-    cb.body_id = i;
-    cb.radius = r;
-    cb.coupling.volume = (4.0f/3.0f) * 3.14159f * r*r*r;
-    cb.coupling.cross_section = 3.14159f * r*r;
-    cb.coupling.drag_coeff = 0.47f;
-    cb.coupling.added_mass_coeff = 0.5f;
-    cb.coupling.two_way_enabled = true;
-    cb.coupling.body_radius = r;
-    coupled_bodies.push_back(cb);
-  }
+  InitCoupledBodies(m, coupled_bodies);
 
   // Initialize WaterEngine with all 5 levels.
   WaterEngine engine;
@@ -1072,23 +1079,7 @@ int main() {
         d = new_d;
         hfield_id = mj_name2id(m, mjOBJ_HFIELD, "water_surface");
         // Rebuild coupled bodies.
-        coupled_bodies.clear();
-        for (int i = 1; i < m->nbody; ++i) {
-          int jnt = m->body_jntadr[i];
-          if (jnt < 0 || m->jnt_type[jnt] != 0) continue;
-          int g = m->body_geomadr[i];
-          if (m->body_geomnum[i] <= 0) continue;
-          float r = static_cast<float>(m->geom_size[3*g]);
-          CoupledBody cb;
-          cb.body_id = i;
-          cb.radius = r;
-          cb.coupling.volume = (4.0f/3.0f) * 3.14159f * r*r*r;
-          cb.coupling.cross_section = 3.14159f * r * r;
-          cb.coupling.shape = BodyShape::kSphere;
-          cb.coupling.two_way_enabled = true;
-          cb.coupling.body_radius = r;
-          coupled_bodies.push_back(cb);
-        }
+        InitCoupledBodies(m, coupled_bodies);
       }
       // Restore body state (preserve ball position/velocity across reload).
       if (new_m && static_cast<int>(saved_qpos.size()) == m->nq) {
