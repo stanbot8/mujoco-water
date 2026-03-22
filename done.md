@@ -7,3 +7,4 @@
 - Added fine-step budget warning, reduced Shepard interval 30->15
 - SPH spatial hash dynamic rehashing when load factor > 4
 - Added Wehausen (1973) reference for waterline damping approximation
+- Documented CSF surface tension as visual-only with ~10-30% accuracy caveat

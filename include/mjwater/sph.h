@@ -616,6 +616,12 @@ struct SPHSolver {
       // CSF surface tension (Morris 2000, Brackbill 1992).
       // Force per unit mass: -sigma * kappa * n_hat / rho
       // where kappa = -div(n_hat), n = grad(color field).
+      //
+      // NOTE: This uses a heuristic Laplacian approximation for curvature,
+      // not the exact kernel Laplacian. Adequate for visual effects (drop
+      // rounding, meniscus formation) but not quantitatively accurate for
+      // capillary wave speeds or contact angle dynamics. Expect ~10-30%
+      // error in surface tension force magnitude.
       if (params.surface_tension > 0) {
         Vec3 grad_c{};
         float lap_c = 0;
