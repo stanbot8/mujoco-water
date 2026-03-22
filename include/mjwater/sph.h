@@ -135,7 +135,7 @@ struct SPHParams {
   float cfl = 0.25f;
   float xsph_epsilon = 0.5f;         // XSPH velocity smoothing (Monaghan 1989)
   uint32_t max_particles = 200000;
-  int shepard_interval = 30;         // Shepard density reinitialization every N steps
+  int shepard_interval = 15;         // Shepard density reinitialization every N steps
   float surface_tension = 0.0728f;   // surface tension coefficient (N/m), water at 20C
 
   // Derived

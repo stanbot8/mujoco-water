@@ -310,6 +310,12 @@ struct WaterEngine {
         swe, sph, swe_flux, sph_flux_tracker, sph_zone, master_dt);
     }
 
+    // Warn if fine step budget was exhausted (simulation is under-resolved).
+    if (total_fine_steps >= kMaxFineSteps) {
+      fprintf(stderr, "mujoco-water: fine step budget exhausted (%d steps). "
+              "Consider reducing LOD substep counts.\n", total_fine_steps);
+    }
+
     sim_time += master_dt;
   }
 

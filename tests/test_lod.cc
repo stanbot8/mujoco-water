@@ -278,9 +278,9 @@ TEST(WaterEngine_Step) {
   engine.Step();
   float vol_after = engine.TotalVolume();
 
-  // Volume should be approximately conserved.
+  // Volume should be conserved (flat quiescent pool, no sources).
   float rel_err = std::abs(vol_after - vol_before) / (vol_before + 1e-10f);
-  CHECK(rel_err < 0.05f);
+  CHECK(rel_err < 1e-4f);
 }
 
 TEST(WaterEngine_FiveLevels) {
@@ -436,9 +436,9 @@ TEST(WaterEngine_LODRoundTrip) {
   engine.Step();  // triggers UpdateLOD -> deactivation
 
   float vol_after = engine.TotalVolume();
-  // Allow 10% tolerance since conservation is approximate across LOD transitions.
+  // With flux-matching corrections, conservation should be within 5%.
   float rel_err = std::abs(vol_after - vol_before) / (vol_before + 1e-10f);
-  CHECK(rel_err < 0.10f);
+  CHECK(rel_err < 0.05f);
 }
 
 TEST(WaterEngine_GridReposition) {
