@@ -9,3 +9,4 @@
 - Added Wehausen (1973) reference for waterline damping approximation
 - Documented CSF surface tension as visual-only with ~10-30% accuracy caveat
 - Added two-way wave generation test and Reynolds drag coefficient test
+- Updated README: architecture diagram, key features, header table with new files

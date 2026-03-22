@@ -38,23 +38,35 @@ The `Step()` pipeline runs the full hierarchy each frame:
 
 ```
 Step(master_dt):
-  0. RepositionGrids()    move LBM/Stokes grids if focus has drifted
-  1. UpdateLOD()          5-level zone check; fire escalation/de-escalation
-  2. Ocean step           advance spectral waves; couple to SWE boundary edges
-  3. SWE step (MUSCL)     2nd-order TVD step at master_dt
-  4. SPH substeps         N_sph steps per master step
-     a. SWE->SPH coupling   ghost zone velocity nudging
-     b. SPH step             neighbor search, density, Tait pressure,
-                             forces + surface tension, XSPH leapfrog
-     c. LBM substeps         N_lbm steps per SPH step
-        i.  SPH->LBM coupling  ghost cell equilibrium nudging
-        ii. LBM step           collide (+ bounce-back) + stream
-        iii. Stokes substeps   N_stokes steps per LBM step
-             - LBM->Stokes coupling    boundary velocity nudging
-             - Stokes step             diffuse, pressure project,
-                                       advect-diffuse concentration
-  5. MuJoCo coupling      buoyancy + drag + added mass -> xfrc_applied
+  1. UpdateLOD()                zone check; activate/deactivate solvers
+  2. Ocean step                 advance spectral waves
+     Ocean->SWE coupling        conservative boundary injection (tracked)
+  3. Two-way body coupling      inject wave sources into SWE from body motion
+  4. SWE step (MUSCL)           2nd-order TVD, HLL Riemann solver
+  5. Absorbing sponge           damp edges (ocean relaxation or zero-momentum)
+  6. Interface flux computation  HLL fluxes at SPH zone boundary
+  7. SPH substeps               CFL-adaptive, N_sph per master step
+     a. SWE->SPH ghost blend    boundary velocity nudging
+     b. SPH flux tracking       detect particle boundary crossings
+     c. SPH step                density, Tait pressure, forces, XSPH leapfrog
+     d. LBM substeps            N_lbm per SPH step
+        i.   SPH->LBM coupling  2nd-order lifting (feq + fneq from stress tensor)
+        ii.  LBM step           TRT collision + Guo forcing + pull streaming
+        iii. Stokes substeps    N_stokes per LBM step
+             - LBM->Stokes      velocity/pressure boundary
+             - Stokes step      diffuse, pressure project, concentration
+        iv.  Stokes->LBM        non-equilibrium extrapolation
+  8. Berger-Colella correction  reconcile SWE and SPH fluxes
+  9. MuJoCo coupling            Morison forces (Re-dependent Cd/Cm) -> xfrc_applied
 ```
+
+### Key features
+
+- **Conservative coupling**: Berger-Colella flux matching at SWE-SPH interface, second-order lifting at SPH-LBM, non-equilibrium extrapolation at LBM-Stokes
+- **Two-way body interaction**: bodies create waves, feel buoyancy + drag + inertia + waterline damping
+- **Absorbing boundaries**: sponge layers prevent wave reflections, blend toward ocean state
+- **Wave-current interaction**: Doppler-shifted spectral ocean with background current field
+- **Breaking waves**: Froude-number limiter dissipates energy in supercritical flow
 
 The water surface is rendered as a single MuJoCo hfield. Wireframe overlay uses chunk-based LOD: coarse everywhere, fine near the focus point.
 
@@ -77,8 +89,10 @@ All headers live in `include/mjwater/`. Include via `#include "mjwater/<header>.
 | `water_sdf.h` | Volume definition via SDF primitives |
 | `lod_manager.h` | Distance-based 5-level zone assignment with hysteresis |
 | `lod_transition.h` | Bidirectional state transfer across all LOD pairs with mass and momentum conservation |
-| `coupling.h` | MuJoCo body-fluid coupling: buoyancy, drag, added mass |
-| `water_engine.h` | Top-level orchestrator |
+| `coupling.h` | Morison equation (Re-dependent Cd/Cm), two-way body-wave coupling |
+| `flux_register.h` | Conservative flux tracking: Berger-Colella registers, SPH flux tracker |
+| `grid_ops.h` | Shared grid coordinate transforms and stencil operations |
+| `water_engine.h` | Top-level orchestrator with conservation diagnostics |
 | `mujoco_utils.h` | MuJoCo helpers: hfield update, force application |
 
 ---
