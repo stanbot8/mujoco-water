@@ -6,3 +6,4 @@
 - Tightened test tolerances (SWE step 5%->0.01%, LOD round-trip 10%->5%)
 - Added fine-step budget warning, reduced Shepard interval 30->15
 - SPH spatial hash dynamic rehashing when load factor > 4
+- Added Wehausen (1973) reference for waterline damping approximation

@@ -308,6 +308,11 @@ struct FluidCoupling {
     // generation, and surface tension all resist vertical motion through
     // the waterline. Modeled as quadratic drag on vertical velocity,
     // scaled by the waterline proximity factor (peaks at half submersion).
+    //
+    // The 4*s*(1-s) profile is a beta(2,2) distribution normalized to
+    // peak at s=0.5 with value 1.0. This is an empirical approximation
+    // to the wave-making resistance coefficient of Wehausen (1973)
+    // for bodies piercing a free surface at low Froude numbers.
     if (submersion > 0.01f && submersion < 0.99f) {
       float waterline_factor = 4.0f * submersion * (1.0f - submersion);
       float vz = body_vel.z;
