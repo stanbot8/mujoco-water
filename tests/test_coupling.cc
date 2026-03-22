@@ -70,6 +70,54 @@ TEST(Coupling_SWEQuery) {
   CHECK(state.depth > 0);
 }
 
+TEST(Coupling_TwoWayWaveGeneration) {
+  // A moving body should inject wave sources into SWE cells.
+  ShallowWaterSolver swe;
+  swe.Init(20, 20, 0.5f);
+  swe.SetSurface(2.0f);
+
+  float vol_before = swe.TotalVolume();
+
+  // Body at grid center, moving downward (displacing water).
+  BodyCoupling body;
+  body.volume = 1.0f;
+  body.cross_section = 0.5f;
+  body.two_way_enabled = true;
+  body.body_radius = 0.5f;
+
+  Vec3 body_pos = {5.0f, 5.0f, 1.5f};
+  Vec3 body_vel = {0, 0, -1.0f};  // moving down into water
+
+  auto sources = FluidCoupling::ComputeWaveSources(swe, body, body_pos, body_vel);
+
+  // Should have produced source terms.
+  CHECK(sources.count > 0);
+
+  // Apply sources and check volume changed.
+  swe.ApplySourceTerms(sources.cell_x.data(), sources.cell_y.data(),
+                        sources.dh.data(), sources.dhu.data(), sources.dhv.data(),
+                        sources.count, 0.01f);
+  float vol_after = swe.TotalVolume();
+
+  // Body moving down displaces water, volume should increase.
+  CHECK(vol_after > vol_before);
+}
+
+TEST(Coupling_ReynoldsDragCoeff) {
+  // Verify drag coefficient correlations return reasonable values.
+  // Stokes regime: Cd = 24/Re
+  float cd_stokes = FluidCoupling::SphereDragCoeff(0.5f);
+  CHECK_NEAR(cd_stokes, 48.0f, 1.0f);  // 24/0.5 = 48
+
+  // Newton regime: Cd ~ 0.44
+  float cd_newton = FluidCoupling::SphereDragCoeff(5000.0f);
+  CHECK_NEAR(cd_newton, 0.44f, 0.01f);
+
+  // Post-critical: Cd ~ 0.1
+  float cd_post = FluidCoupling::SphereDragCoeff(1e6f);
+  CHECK_NEAR(cd_post, 0.1f, 0.01f);
+}
+
 int main() {
   return RunAllTests();
 }
