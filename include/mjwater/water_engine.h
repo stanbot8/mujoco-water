@@ -71,6 +71,11 @@ struct WaterEngineConfig {
   int stokes_substeps = 10;        // Stokes substeps per LBM step
   int stokes_ghost_cells = 3;      // boundary coupling depth
 
+  // --- Coupling ---
+  int sph_to_lbm_ghost_cells = 5;   // ghost zone depth for SPH->LBM coupling
+  float lbm_reposition_threshold = 0.25f;    // reposition LBM grid when focus drifts this fraction of extent
+  float stokes_reposition_threshold = 0.25f; // same for Stokes grid
+
   // --- Timestep hierarchy ---
   float master_dt = 0.01f;         // 10 ms master step
   int sph_substeps = 10;           // SPH runs at ~1 ms
@@ -278,7 +283,7 @@ struct WaterEngine {
 
         // 5. LBM sub-substeps (fixed dt from lattice relaxation time).
         if (lbm_active) {
-          int ghost_cells = 5;
+          int ghost_cells = config.sph_to_lbm_ghost_cells;
 
           for (int l = 0; l < config.lbm_substeps && total_fine_steps < kMaxFineSteps; ++l) {
             LODTransition::CoupleSPHToLBM(sph, lbm, ghost_cells);
@@ -528,7 +533,7 @@ struct WaterEngine {
                                                      config.lbm_ny,
                                                      config.lbm_nz});
       float drift = (focus - lbm_center).Length();
-      if (drift > lbm_extent * 0.25f) {
+      if (drift > lbm_extent * config.lbm_reposition_threshold) {
         // Save LBM state to SPH, reposition, reinitialize from SPH.
         if (stokes_active) {
           LODTransition::StokesToLBM(stokes, lbm);
@@ -553,7 +558,7 @@ struct WaterEngine {
                                               config.stokes_ny,
                                               config.stokes_nz});
       float drift = (focus - stokes_center).Length();
-      if (drift > stokes_extent * 0.25f) {
+      if (drift > stokes_extent * config.stokes_reposition_threshold) {
         // Reset and reinitialize Stokes at new position.
         stokes.grid.origin_x = focus.x - sdx * config.stokes_nx * 0.5f;
         stokes.grid.origin_y = focus.y - sdx * config.stokes_ny * 0.5f;

@@ -135,8 +135,12 @@ struct SPHParams {
   float cfl = 0.25f;
   float xsph_epsilon = 0.5f;         // XSPH velocity smoothing (Monaghan 1989)
   uint32_t max_particles = 200000;
-  int shepard_interval = 15;         // Shepard density reinitialization every N steps
+  // Shepard density reinitialization every N steps. 15 is balanced for 1ms
+  // SPH timesteps (~15ms physical period). Scale proportionally: use 30
+  // for 0.5ms steps, 8 for 2ms steps, targeting ~15ms between corrections.
+  int shepard_interval = 15;
   float surface_tension = 0.0728f;   // surface tension coefficient (N/m), water at 20C
+  float boundary_damping = 0.5f;    // velocity damping on domain boundary reflection (0=absorb, 1=elastic)
 
   // Derived
   float ParticleMass(float spacing) const {
@@ -240,7 +244,9 @@ struct SpatialHash {
   }
 
   // Iterate neighbors of a position within support radius.
-  // Calls fn(particle_index) for each candidate.
+  // Calls fn(particle_index) for each candidate within the 3x3x3 cell
+  // neighborhood. The support parameter is accepted for API consistency
+  // but not used (cell_size already equals the kernel support radius).
   template <typename Fn>
   void ForEachNeighbor(Vec3 pos, float /*support*/, Fn&& fn) const {
     if (cell_start.empty()) return;  // no particles / hash not built
@@ -690,7 +696,7 @@ struct SPHSolver {
   }
 
   void EnforceBoundaries() {
-    float damping = 0.5f;  // velocity damping on boundary reflection
+    float damping = params.boundary_damping;
     for (auto& p : particles) {
       auto reflect = [&](float& pos, float& vel, float lo, float hi) {
         if (pos < lo) { pos = lo; if (vel < 0) vel *= -damping; }

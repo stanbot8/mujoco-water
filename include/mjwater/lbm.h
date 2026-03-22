@@ -233,11 +233,11 @@ struct LBMSolver {
             int sy = static_cast<int>(y) - kEy[i];
             int sz = static_cast<int>(z) - kEz[i];
 
-            // Periodic or clamp boundary.
+            // Open boundary: if neighbor is outside domain, keep this
+            // cell's own post-collision value (zero-gradient extrapolation).
             if (sx < 0 || sx >= static_cast<int>(nx) ||
                 sy < 0 || sy >= static_cast<int>(ny) ||
                 sz < 0 || sz >= static_cast<int>(nz)) {
-              // Open boundary: keep post-collision value.
               fi[i] = grid.f_dst[c * kQ + i];
               continue;
             }
