@@ -3,3 +3,6 @@
 - Wave-current Doppler interaction in spectral ocean (Jonsson 1990)
 - Breaking wave detection with Froude-number limiter (McCowan 1894, Battjes-Janssen 1978)
 - Hydrostatic smoothstep submersion model with lateral Froude-Krylov force
+- Tightened test tolerances (SWE step 5%->0.01%, LOD round-trip 10%->5%)
+- Added fine-step budget warning, reduced Shepard interval 30->15
+- SPH spatial hash dynamic rehashing when load factor > 4

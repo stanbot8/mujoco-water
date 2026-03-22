@@ -189,8 +189,21 @@ struct SpatialHash {
   }
 
   // Build the spatial hash from particle positions (counting sort).
+  // Rehashes if particle count has grown beyond 4x the table size
+  // (load factor > 4 degrades O(1) lookup to O(N/table_size)).
   void Build(const std::vector<SPHParticle>& particles) {
     uint32_t n = static_cast<uint32_t>(particles.size());
+
+    // Dynamic rehash: if load factor exceeds 4, double the table.
+    if (n > table_size * 4) {
+      uint32_t new_size = table_size;
+      while (new_size < n / 4) new_size *= 2;
+      new_size = std::max(new_size, 1024u);
+      table_size = new_size;
+      cell_start.resize(table_size);
+      cell_end.resize(table_size);
+    }
+
     cell_hash.resize(n);
     sorted_idx.resize(n);
 
