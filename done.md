@@ -1,0 +1,14 @@
+- Reynolds-dependent Morison force coefficients (Cd/Cm from DNV-RP-C205, sphere + cylinder correlations)
+- Background current velocity field for SWE, maintained by sponge boundaries
+- Wave-current Doppler interaction in spectral ocean (Jonsson 1990)
+- Breaking wave detection with Froude-number limiter (McCowan 1894, Battjes-Janssen 1978)
+- Hydrostatic smoothstep submersion model with lateral Froude-Krylov force
+- Tightened test tolerances (SWE step 5%->0.01%, LOD round-trip 10%->5%)
+- Added fine-step budget warning, reduced Shepard interval 30->15
+- SPH spatial hash dynamic rehashing when load factor > 4
+- Added Wehausen (1973) reference for waterline damping approximation
+- Documented CSF surface tension as visual-only with ~10-30% accuracy caveat
+- Added two-way wave generation test and Reynolds drag coefficient test
+- Updated README: architecture diagram, key features, header table with new files
+- Extracted hardcoded constants to config: ghost_cells, reposition thresholds, boundary damping
+- Fixed stale LBM boundary comment, documented SPH hash support param and Shepard rationale
