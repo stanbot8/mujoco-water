@@ -96,6 +96,84 @@ struct WaterEngineConfig {
 
   // --- Background current ---
   Vec3 current_velocity;           // uniform background current (m/s), default zero
+
+  // Build a config from a physical extent and grid resolution.
+  // All solver spacings, LOD radii, domain bounds, and timesteps are derived
+  // from the extent so the same grid count works at any scale.
+  //
+  //   extent_m:  physical size of the SWE domain (meters), e.g. 1000 for 1km,
+  //              0.05 for a 5cm vial
+  //   n:         grid cells per side (SWE). Default 50.
+  //   depth_m:   water depth. Default extent/10.
+  //
+  // Examples:
+  //   auto cfg = WaterEngineConfig::ForExtent(1000.0f);   // 1km ocean
+  //   auto cfg = WaterEngineConfig::ForExtent(0.05f);     // 5cm vial
+  //   auto cfg = WaterEngineConfig::ForExtent(10.0f, 80); // 10m pool, 80x80
+  static WaterEngineConfig ForExtent(float extent_m, int n = 50,
+                                      float depth_m = 0) {
+    WaterEngineConfig cfg;
+    float dx = extent_m / static_cast<float>(n);
+    if (depth_m <= 0) depth_m = extent_m * 0.1f;
+
+    // SWE
+    cfg.swe_nx = static_cast<uint32_t>(n);
+    cfg.swe_ny = static_cast<uint32_t>(n);
+    cfg.swe_dx = dx;
+
+    // SPH: ~1/1000 of extent, at least 50x finer than SWE
+    cfg.sph_spacing = extent_m * 1e-3f;
+    cfg.sph_smoothing = cfg.sph_spacing * 1.5f;
+
+    // LBM: ~1e-5 of extent
+    cfg.lbm_dx = extent_m * 1e-5f;
+
+    // Stokes: ~1e-7 of extent
+    cfg.stokes.dx = extent_m * 1e-7f;
+
+    // Domain: centered, depth below, headroom above
+    float half = extent_m * 0.5f;
+    cfg.domain = {{-half, -half, -depth_m},
+                  { half,  half,  depth_m * 0.5f}};
+
+    cfg.initial_surface_z = depth_m;
+
+    // Timestep: CFL-based on SWE wave speed c = sqrt(g * depth)
+    float c = std::sqrt(9.80665f * depth_m);
+    cfg.master_dt = 0.4f * dx / (c > 0 ? c : 1.0f);
+
+    // Substep ratios: each level runs ~dx_ratio faster
+    float sph_dt = 0.4f * cfg.sph_spacing / (c > 0 ? c : 1.0f);
+    cfg.sph_substeps = std::max(1, static_cast<int>(cfg.master_dt / sph_dt));
+    cfg.lbm_substeps = std::max(1, static_cast<int>(
+        cfg.sph_spacing / cfg.lbm_dx));
+
+    // LOD radii: geometric progression from extent inward
+    cfg.lod.swe_radius    = extent_m;
+    cfg.lod.sph_radius    = extent_m * 0.01f;
+    cfg.lod.lbm_radius    = extent_m * 1e-4f;
+    cfg.lod.stokes_radius = extent_m * 1e-6f;
+
+    // Ocean: scale wave params to domain size.
+    // Max wavelength can't exceed the domain. Fetch limits wave growth:
+    // Hs ~ 0.0016 * sqrt(g * fetch) / g * U^2 (Sverdrup-Munk-Bretschneider)
+    // For fully developed seas (fetch -> inf), Hs ~ 0.21 * U^2/g.
+    // Ratio = sqrt(fetch / fetch_full) where fetch_full ~ 77000 * (U/g)^2.
+    cfg.ocean_enabled = (extent_m > 1.0f);
+    cfg.ocean.max_wavelength = std::min(300.0f, extent_m * 0.5f);
+    cfg.ocean.min_wavelength = std::max(0.01f, extent_m * 0.002f);
+    cfg.ocean.depth = depth_m;
+    cfg.ocean_mean_depth = depth_m;
+    float U = cfg.ocean.wind_speed;
+    float g = 9.80665f;
+    float fetch_full = 77000.0f * (U * U) / (g * g);
+    float fetch = extent_m;
+    float fetch_ratio = std::sqrt(std::min(1.0f, fetch / fetch_full));
+    cfg.ocean.amplitude_scale = fetch_ratio;
+    cfg.sponge_width = 5;
+
+    return cfg;
+  }
 };
 
 struct WaterEngine {

@@ -45,6 +45,8 @@ static constexpr float kPanelWidth = 300.0f;      // side panel width (mujoco-wa
 // Water surface height. The single authoritative value.
 // Everything else (hfield range, domain bounds, ball spawn) derives from this.
 static float g_water_z = 100.0f;
+// Domain extent in meters. Controls the physical size of the simulation.
+static float g_extent = 1000.0f;
 
 // Hfield rendering range, derived from g_water_z.
 static float g_z_top() { return g_water_z * 1.2f; }
@@ -91,6 +93,8 @@ static float g_fps = 0;
 // ---- MJCF ----
 
 static std::string BuildMJCF(float ball_z) {
+  float half = g_extent * 0.5f;
+
   char buf[4096];
   snprintf(buf, sizeof(buf), R"(
 <mujoco model="multiscale_demo">
@@ -118,7 +122,7 @@ static std::string BuildMJCF(float ball_z) {
     <light pos="300 -300 400" dir="-0.5 0.5 -1" diffuse="0.5 0.5 0.5" castshadow="false"/>
     <light pos="-200 200 300" dir="0.3 -0.3 -1" diffuse="0.3 0.35 0.4" castshadow="false"/>
 
-    <!-- Deep ocean floor -->
+    <!-- Ocean floor -->
     <geom type="plane" size="2000 2000 0.1" pos="0 0 %f"
           rgba="0.12 0.18 0.25 1" contype="0" conaffinity="0"/>
 
@@ -127,7 +131,7 @@ static std::string BuildMJCF(float ball_z) {
           pos="0 0 0" material="water_mat"
           contype="0" conaffinity="0"/>
 
-    <!-- Floating platform (large enough to create visible waves at ocean scale) -->
+    <!-- Floating platform -->
     <body name="ball" pos="0 0 %f">
       <freejoint/>
       <geom type="sphere" size="10" density="500"
@@ -138,8 +142,8 @@ static std::string BuildMJCF(float ball_z) {
 </mujoco>
   )", -kGravity,
       kSweN, kSweN,
-      kSweDx * kSweN * 0.5f, kSweDx * kSweN * 0.5f, g_z_top(), g_z_bottom(),
-      kOceanFloorZ,
+      half, half, g_z_top(), g_z_bottom(),
+      -g_water_z,
       ball_z);
   return std::string(buf);
 }
@@ -578,6 +582,9 @@ static void DrawPanel(WaterEngine& engine, const WaterEngineConfig& cfg,
     ImGui::Text("Master dt: %.4f s", cfg.master_dt);
     if (ImGui::Button("Reset (R)")) g_reset_requested = true;
     if (ImGui::SliderFloat("Water height", &g_water_z, 1.0f, 5000.0f, "%.0f m", ImGuiSliderFlags_Logarithmic)) {
+      g_reload_model = true;
+    }
+    if (ImGui::SliderFloat("Extent", &g_extent, 0.01f, 10000.0f, "%.2f m", ImGuiSliderFlags_Logarithmic)) {
       g_reload_model = true;
     }
   }
@@ -1093,10 +1100,18 @@ int main() {
         std::copy(saved_qvel.begin(), saved_qvel.end(), d->qvel);
         mj_forward(m, d);
       }
-      // Restore camera and sync engine config from g_water_z.
+      // Rebuild config from extent, then override water height.
       viewer.cam = saved_cam;
+      cfg = mjwater::WaterEngineConfig::ForExtent(g_extent, kSweN);
       cfg.initial_surface_z = g_water_z;
-      cfg.domain.max.z = g_water_z + 50;
+      cfg.domain.min.z = -g_water_z;
+      cfg.domain.max.z = g_water_z + g_extent * 0.05f;
+      cfg.ocean.wind_speed = 15.0f;
+      cfg.ocean.jonswap_gamma = 3.3f;
+      // Recompute fetch-limited amplitude for the actual wind speed.
+      float U = cfg.ocean.wind_speed, g = 9.80665f;
+      float fetch_full = 77000.0f * (U * U) / (g * g);
+      cfg.ocean.amplitude_scale = std::sqrt(std::min(1.0f, g_extent / fetch_full));
       engine.Init(cfg);
       PlaceAmoeba();
       physics_accumulator = 0;
