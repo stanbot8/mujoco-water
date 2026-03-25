@@ -1,6 +1,6 @@
 # mujoco-water
 
-Header-only C++20 multiscale water simulation for [MuJoCo](https://mujoco.org/). Five concurrent LOD levels span roughly 10 orders of magnitude: spectral ocean (km) down to cellular-scale Stokes flow (um). The water surface renders as a single solid hfield volume. Forces apply via `data->xfrc_applied`; disable MuJoCo's built-in fluid model (`opt.density = 0; opt.viscosity = 0;`) to avoid double-counting.
+Header-only C++20 multiscale water simulation for [MuJoCo](https://mujoco.org/). Five concurrent LOD levels span roughly 10 orders of magnitude: spectral ocean (km) down to cellular-scale Stokes flow (um). The water surface renders as a single solid hfield volume. Forces apply via `data->xfrc_applied`. When you register a body with `AddBody`, call `mjwater::DisableBuiltinFluid(m, body_id)` to turn off MuJoCo's built-in fluid on that body. Uncoupled bodies keep MuJoCo's default fluid.
 
 ![Multiscale demo](docs/Screenshot.png)
 
@@ -187,9 +187,6 @@ An interactive CLI wizard that generates a project folder with the headers and C
 #include "mjwater/mjwater.h"
 #include "mjwater/mujoco_utils.h"
 
-// Disable MuJoCo's built-in fluid model to avoid double-counting.
-// m->opt.density = 0; m->opt.viscosity = 0;
-
 mjwater::WaterEngineConfig cfg;
 cfg.swe_nx = 40;  cfg.swe_ny = 40;  cfg.swe_dx = 0.1f;
 cfg.initial_surface_z = 0.5f;
@@ -206,6 +203,7 @@ hull.cross_section   = 0.1f;   // reference area (m^2)
 hull.drag_coeff      = 0.8f;   // Cd
 hull.added_mass_coeff = 0.5f;  // Ca (0.5 for sphere)
 size_t hull_idx = water.AddBody(hull);
+mjwater::DisableBuiltinFluid(m, hull_id);  // mujoco-water owns this body's fluid forces
 
 // In the simulation loop:
 water.SetFocus({d->xpos[3*hull_id], d->xpos[3*hull_id+1],

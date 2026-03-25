@@ -25,6 +25,21 @@
 
 namespace mjwater {
 
+// Disable MuJoCo's built-in fluid forces on a specific body.
+// Zeroes geom_fluid for every geom attached to body_id, preventing
+// MuJoCo from applying its own drag/buoyancy on that body while
+// leaving all other bodies on the built-in fluid model.
+// Call once per body after mjModel is loaded, before the simulation loop.
+inline void DisableBuiltinFluid(mjModel* m, int body_id) {
+  for (int g = 0; g < m->ngeom; ++g) {
+    if (m->geom_bodyid[g] == body_id) {
+      for (int k = 0; k < mjNFLUID; ++k) {
+        m->geom_fluid[g * mjNFLUID + k] = 0;
+      }
+    }
+  }
+}
+
 // Copy SWE + ocean surface heights to a MuJoCo hfield asset.
 //
 // The hfield data is normalized to [0, 1] where 1.0 maps to z_max.
